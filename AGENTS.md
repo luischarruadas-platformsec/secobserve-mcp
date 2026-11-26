@@ -39,6 +39,7 @@ Do not expand into these without the user asking.
 - Tests: `pytest` + `pytest-asyncio` (`asyncio_mode = "auto"`) with `respx` mocking HTTP. Never call mutating endpoints on a real SecObserve instance from a test.
 - Lint/types: `ruff` (line-length 120) and `mypy --strict`, both clean before anything ships.
 - CI runs the same checks on every push and every pull request, and `release.yml` re-runs them on the tag, because the tagged commit is what ships.
+- Build inputs are pinned to content, not to names: every action in `.github/workflows` to a commit with its tag in a comment, the `mcp-publisher` binary to a release and its checksum, both images in the `Dockerfile` to a digest, and the image's dependencies to the hashes in `uv.lock`. The release job holds the publishing identity, so anything it runs unpinned can publish as this project.
 
 ## Code structure
 
