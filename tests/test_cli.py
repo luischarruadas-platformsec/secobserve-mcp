@@ -235,6 +235,8 @@ async def test_a_write_is_refused_after_shared_identity(monkeypatch: pytest.Monk
 
 def test_stdio_is_untouched(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     """One process, one user, their own token: the shared-identity guard does not override what the operator set."""
+    monkeypatch.setenv(config.ENV_BASE_URL, "https://secobserve.test")
+    config.get_config.cache_clear()
     calls = _no_run_server(monkeypatch)
     monkeypatch.setattr("sys.argv", ["secobserve-mcp"])
 

@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 ENV_BASE_URL = "SECOBSERVE_BASE_URL"
@@ -76,8 +76,9 @@ def _hosts_env(name: str) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class Config:
     base_url: str
-    api_token: str | None
-    jwt: str | None
+    # Out of the repr, so a config that ends up in a log line or a traceback does not carry the credential.
+    api_token: str | None = field(repr=False)
+    jwt: str | None = field(repr=False)
     timeout: float
     verify_ssl: bool
     read_only: bool

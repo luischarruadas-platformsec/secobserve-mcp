@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from . import __version__
 from .config import (
@@ -184,6 +186,23 @@ def _shared_identity_refusal(host: str, port: int) -> str:
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 
 
+def _cleartext_warning(base_url: str) -> str | None:
+    """A warning when the token would cross a network unencrypted, None when it stays on this machine or uses TLS."""
+    parts = urlsplit(base_url)
+    host = parts.hostname or ""
+    if parts.scheme != "http" or host == "localhost" or host.endswith(".localhost"):
+        return None
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return None
+    except ValueError:
+        pass
+    return (
+        f"Warning: {ENV_BASE_URL} is http:// to {host}, so the credential and every finding cross the network "
+        "unencrypted. Use https://; plain http is for a SecObserve on this machine."
+    )
+
+
 def _transport_security(extra_hosts: tuple[str, ...]) -> TransportSecuritySettings:
     """Host and Origin checks that hold on every bind address.
 
@@ -262,6 +281,9 @@ def main() -> int:
         # stdio clients swallow stdout, so configuration problems go to stderr.
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
+
+    if warning := _cleartext_warning(config.base_url):
+        print(warning, file=sys.stderr)
 
     if args.check:
         return asyncio.run(_check())

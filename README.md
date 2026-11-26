@@ -87,7 +87,7 @@ uv venv && uv pip install -e ".[dev]"
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `SECOBSERVE_BASE_URL` | `http://localhost:8000` | Base URL **without** `/api`. |
+| `SECOBSERVE_BASE_URL` | `http://localhost:8000` | Base URL **without** `/api`. Plain `http://` to another machine sends the token unencrypted and is warned about at startup. |
 | `SECOBSERVE_API_TOKEN` | — | User or product API token. Recommended. |
 | `SECOBSERVE_JWT` | — | Alternative to an API token. |
 | `SECOBSERVE_TIMEOUT` | `60` | Seconds. SecObserve imports and scans inside the request, and a timeout does not cancel one; raise it to get the counts back from the call itself. |
