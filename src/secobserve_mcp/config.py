@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -19,6 +20,7 @@ ENV_ALLOW_DELETE = "SECOBSERVE_ALLOW_DELETE"
 ENV_EXPORT_DIR = "SECOBSERVE_EXPORT_DIR"
 ENV_IMPORT_DIR = "SECOBSERVE_IMPORT_DIR"
 ENV_AUDIT_LOG = "SECOBSERVE_AUDIT_LOG"
+ENV_ALLOWED_HOSTS = "SECOBSERVE_ALLOWED_HOSTS"
 
 CREDENTIAL_HEADER = "X-SecObserve-Token"
 # Bearer is SecObserve's OIDC path: it validates the token against the IdP's JWKS and resolves the real user,
@@ -55,6 +57,22 @@ def _bool_env(name: str, default: bool) -> bool:
     raise ConfigError(f"{name}={raw!r} is not a boolean. Set it to true or false (1/0, yes/no and on/off also work).")
 
 
+# A name or address with an optional port, as it appears in a Host header: no scheme, no path, no wildcard.
+_HOST = re.compile(r"^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)(:\d{1,5})?$")
+
+
+def _hosts_env(name: str) -> tuple[str, ...]:
+    """Read a comma-separated list of Host header values, refusing an entry that could never match one."""
+    hosts = tuple(entry.strip() for entry in os.environ.get(name, "").split(",") if entry.strip())
+    for host in hosts:
+        if not _HOST.match(host):
+            raise ConfigError(
+                f"{name} entry {host!r} is not a host name. Give the names clients put in the Host header, "
+                "comma-separated, each as name or name:port -- no scheme, no path, no wildcard."
+            )
+    return hosts
+
+
 @dataclass(frozen=True)
 class Config:
     base_url: str
@@ -66,6 +84,7 @@ class Config:
     allow_delete: bool
     export_dir: str
     import_dir: str | None
+    allowed_hosts: tuple[str, ...]
 
     @property
     def auth_header(self) -> str:
@@ -108,6 +127,7 @@ def get_config() -> Config:
         # There is no default: the working directory is whatever the client launched from, often a home
         # directory or a repository full of files that are not scan reports.
         import_dir=os.environ.get(ENV_IMPORT_DIR) or None,
+        allowed_hosts=_hosts_env(ENV_ALLOWED_HOSTS),
     )
 
 

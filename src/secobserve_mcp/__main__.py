@@ -15,10 +15,12 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import __version__
 from .config import (
     ENV_ALLOW_DELETE,
+    ENV_ALLOWED_HOSTS,
     ENV_API_TOKEN,
     ENV_AUDIT_LOG,
     ENV_BASE_URL,
@@ -33,6 +35,9 @@ from .config import (
     get_config,
 )
 
+if TYPE_CHECKING:
+    from mcp.server.transport_security import TransportSecuritySettings
+
 EPILOG = f"""environment:
   {ENV_BASE_URL}     SecObserve base URL without /api (default http://localhost:8000)
   {ENV_API_TOKEN}    user or product API token (recommended)
@@ -44,6 +49,7 @@ EPILOG = f"""environment:
   {ENV_IMPORT_DIR}   directory uploads may be read from; uploads are off until it is set
   {ENV_EXPORT_DIR}   directory exports are written to (default: ./secobserve-exports)
   {ENV_AUDIT_LOG}    one JSON line per tool call on stderr; set to false to switch it off
+  {ENV_ALLOWED_HOSTS} Host names --transport http answers to besides localhost, comma-separated
 
 A boolean is true/false, 1/0, yes/no or on/off. Any other value is refused at startup.
 """
@@ -175,6 +181,29 @@ def _shared_identity_refusal(host: str, port: int) -> str:
     )
 
 
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+
+
+def _transport_security(extra_hosts: tuple[str, ...]) -> TransportSecuritySettings:
+    """Host and Origin checks that hold on every bind address.
+
+    The SDK switches them on by itself for a loopback bind only. A container has to bind 0.0.0.0, and there the SDK
+    answers any Host and any Origin, so a web page that rebinds its own name to this port reads SecObserve through
+    the browser of whoever opened it. Loopback names always pass, which is what a published container port is
+    reached by; every other name a client uses is the operator's to list.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    hosts: list[str] = []
+    origins: list[str] = []
+    for host in (*LOOPBACK_HOSTS, *extra_hosts):
+        has_port = ":" in host and not host.endswith("]") and host.rpartition(":")[2].isdigit()
+        for name in (host,) if has_port else (host, f"{host}:*"):
+            hosts.append(name)
+            origins.extend((f"http://{name}", f"https://{name}"))
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins)
+
+
 def _force_read_only() -> None:
     """Refuse writes for the rest of the process, through the switch client.request already enforces."""
     os.environ[ENV_READ_ONLY] = "true"
@@ -238,6 +267,7 @@ def main() -> int:
         return asyncio.run(_check())
 
     if args.transport == "http":
+        allowed_hosts = config.allowed_hosts
         if config.api_token or config.jwt:
             if not args.shared_identity:
                 print(_shared_identity_refusal(args.host, args.port), file=sys.stderr)
@@ -248,12 +278,20 @@ def main() -> int:
                 f"{ENV_API_TOKEN}/{ENV_JWT}; this process refuses every write.",
                 file=sys.stderr,
             )
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            also = f" and {', '.join(allowed_hosts)}" if allowed_hosts else ""
+            print(
+                f"Bound to {args.host}:{args.port}; requests are answered for the Host names localhost, 127.0.0.1, "
+                f"[::1]{also}. A client using any other name gets 421 until it is listed in {ENV_ALLOWED_HOSTS}.",
+                file=sys.stderr,
+            )
         mcp.run(
             transport="streamable-http",
             host=args.host,
             port=args.port,
             stateless_http=True,
             json_response=True,
+            transport_security=_transport_security(allowed_hosts),
         )
     else:
         mcp.run()

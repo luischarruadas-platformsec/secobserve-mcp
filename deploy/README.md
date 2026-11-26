@@ -42,6 +42,7 @@ The install fails when the gateway namespace or selector is unset or empty, and 
 
 - The server is read-only, because one token serves every caller of the port: `--shared-identity` in `args` forces it, whatever `secobserve.readOnly` says.
 - `SECOBSERVE_ALLOW_DELETE` is `false`, and deletes cascade in SecObserve.
+- The server answers only to the Host names in `SECOBSERVE_ALLOWED_HOSTS` and to loopback names; any other gets `421`. The plain manifest lists the Service's names in the `default` namespace, so edit them to yours; the chart derives them from the release and takes more through `secobserve.allowedHosts`.
 - The readiness probe hits `/healthz`, which never calls SecObserve, so it only reports that the listener is up. A SecObserve outage leaves the pod in the Service on purpose: there is no healthier replica to fail over to, and the tool's error text says more than a refused connection.
 - The image tag is pinned, since `latest` would move the tool surface under an already-configured client.
 - Exports land in an `emptyDir` and cannot be fetched over HTTP, so the export tools are of little use in this deployment.

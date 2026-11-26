@@ -36,6 +36,9 @@ spec:
               value: "true"
             - name: SECOBSERVE_ALLOW_DELETE
               value: "false"
+            # The names the gateway reaches this Service by; any other Host header is answered with 421. Edit the namespace.
+            - name: SECOBSERVE_ALLOWED_HOSTS
+              value: secobserve-mcp,secobserve-mcp.default,secobserve-mcp.default.svc,secobserve-mcp.default.svc.cluster.local
             - name: SECOBSERVE_EXPORT_DIR
               value: /tmp/secobserve-exports
             # Uploads are confined to this directory and are off without it.
