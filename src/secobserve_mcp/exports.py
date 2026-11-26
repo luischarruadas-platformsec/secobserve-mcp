@@ -50,16 +50,42 @@ def write_export(base_name: str, action: str, content: bytes) -> str:
         str: A one-line report with the absolute path and the number of bytes written.
     """
     directory = Path(get_config().export_dir)
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     stem = safe_basename(base_name)
     extension = extension_for(action)
     target = directory / (stem if stem.endswith(extension) else f"{stem}{extension}")
-    target.write_bytes(content)
+    replaced = ", replacing an earlier file of that name" if target.exists() else ""
+    _write_private(target, content)
 
     if not content:
-        return f"Wrote an empty file to {target} -- the export matched no records."
-    return f"Wrote {len(content)} bytes to {target}"
+        return f"Wrote an empty file to {target}{replaced} -- the export matched no records."
+    return f"Wrote {len(content)} bytes to {target}{replaced}"
+
+
+def _write_private(target: Path, content: bytes) -> None:
+    """Write a file only its owner can read, and never through a link left in the export directory.
+
+    An export is the instance's findings in bulk. The default mode would leave it readable by every account on
+    the machine, and following a link would overwrite whatever the link points at with it.
+    """
+    refusal = (
+        f"Refusing to write {target}: it is a symbolic link, and following it would overwrite whatever it "
+        "points at. Remove the link or pass another filename."
+    )
+    if target.is_symlink():
+        raise ValueError(refusal)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(target, flags, 0o600)
+    except OSError as exc:
+        if target.is_symlink():
+            raise ValueError(refusal) from exc
+        raise
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(content)
+    # The mode above applies to a new file only; one left by an earlier version keeps its own until this.
+    os.chmod(target, 0o600)
 
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
