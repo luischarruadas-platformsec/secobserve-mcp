@@ -130,7 +130,7 @@ This is the most important invariant in the repository.
 - Every error message must say **what to do next**: the offending field, the valid values, or the tool to use instead.
 - DRF 400 bodies are returned verbatim, because they already name the wrong field. Do not swallow or paraphrase them.
 - A 404 must mention that SecObserve hides records outside the caller's products, not just say "not found".
-- Never log the token, the `Authorization` header, or request bodies. `httpx` logs URLs at INFO to stderr, which is acceptable because auth lives in the header.
+- Never log the token, the `Authorization` header, request bodies or request URLs. A query string carries filter values and search text, so `client.py` holds the `httpx` logger at WARNING; the SDK sets the root logger to INFO, where `httpx` would log every URL.
 
 ## Write and delete safety invariants
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -22,6 +23,10 @@ from .redaction import REDACTED, carries_placeholder, redact
 # httpx resolves dot segments and drops a fragment, so any of these lets a caller-supplied id move the request to
 # another endpoint, or out of /api with the credential attached.
 _UNSAFE_PATH = re.compile(r"[?#%\\]|//|(^|/)\.{1,2}(/|$)")
+
+# httpx logs each request URL at INFO and the SDK sets the root logger there. The query string carries filter
+# values and search text, which are product names and whatever else a caller asked about.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _client: httpx.AsyncClient | None = None
 
