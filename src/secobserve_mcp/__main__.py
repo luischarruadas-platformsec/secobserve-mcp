@@ -41,7 +41,7 @@ EPILOG = f"""environment:
   {ENV_VERIFY_SSL}   set to false only for a self-signed dev certificate
   {ENV_READ_ONLY}    every write is refused by default; set to false to allow writes
   {ENV_ALLOW_DELETE} set to true to enable secobserve_delete and bulk-delete actions (deletes cascade)
-  {ENV_IMPORT_DIR}   directory uploads may be read from (default: working directory)
+  {ENV_IMPORT_DIR}   directory uploads may be read from; uploads are off until it is set
   {ENV_EXPORT_DIR}   directory exports are written to (default: ./secobserve-exports)
   {ENV_AUDIT_LOG}    one JSON line per tool call on stderr; set to false to switch it off
 

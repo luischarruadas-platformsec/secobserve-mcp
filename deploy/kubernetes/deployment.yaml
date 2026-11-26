@@ -38,7 +38,7 @@ spec:
               value: "false"
             - name: SECOBSERVE_EXPORT_DIR
               value: /tmp/secobserve-exports
-            # Uploads are confined to this directory; the default is the working directory, which is / in this image.
+            # Uploads are confined to this directory and are off without it.
             - name: SECOBSERVE_IMPORT_DIR
               value: /tmp/secobserve-imports
           # /healthz never calls SecObserve, so readiness only says the listener is up and a SecObserve outage never pulls this pod out of the Service.

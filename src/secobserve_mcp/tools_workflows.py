@@ -764,8 +764,9 @@ async def secobserve_upload_file(
     the report, and records a vulnerability check. Creating observations by hand
     with secobserve_create does none of that.
 
-    The file must live under the server's import directory (SECOBSERVE_IMPORT_DIR,
-    the working directory by default) and be at most 64 MiB.
+    The file must live under the server's import directory (SECOBSERVE_IMPORT_DIR;
+    uploads are off until an operator sets it), must not be a hidden file, and
+    must be at most 64 MiB.
 
     Args:
         kind (str): "observations", "sbom" or "vex".
@@ -795,8 +796,8 @@ async def secobserve_upload_file(
           (use secobserve_api_import).
 
     Error Handling:
-        A path outside the import directory, a missing, empty or oversized file is
-        refused before any request is made. 400 usually means the parser could not
+        No import directory configured, a path outside it, a hidden, missing,
+        empty or oversized file is refused before any request is made. 400 usually means the parser could not
         read the format -- check the product's expected parser with
         secobserve_list(resource="parsers"). Read-only mode blocks the call.
     """

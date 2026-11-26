@@ -65,7 +65,7 @@ class Config:
     read_only: bool
     allow_delete: bool
     export_dir: str
-    import_dir: str
+    import_dir: str | None
 
     @property
     def auth_header(self) -> str:
@@ -104,9 +104,10 @@ def get_config() -> Config:
         # Deletes cascade in SecObserve, so they stay off unless switched on.
         allow_delete=_bool_env(ENV_ALLOW_DELETE, False),
         export_dir=os.environ.get(ENV_EXPORT_DIR) or os.path.join(os.getcwd(), "secobserve-exports"),
-        # Uploads are confined to one tree so a crafted path cannot push
-        # arbitrary local files into SecObserve.
-        import_dir=os.environ.get(ENV_IMPORT_DIR) or os.getcwd(),
+        # Uploads are confined to one tree so a crafted path cannot push arbitrary local files into SecObserve.
+        # There is no default: the working directory is whatever the client launched from, often a home
+        # directory or a repository full of files that are not scan reports.
+        import_dir=os.environ.get(ENV_IMPORT_DIR) or None,
     )
 
 

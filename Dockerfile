@@ -21,8 +21,7 @@ RUN python -m pip install --no-cache-dir /wheels/* \
 LABEL io.modelcontextprotocol.server.name="io.github.nh4ttruong/secobserve-mcp"
 
 USER secobserve
-# Both SECOBSERVE_IMPORT_DIR and SECOBSERVE_EXPORT_DIR default to the working directory, and at / that
-# makes exports unwritable and gives the upload confinement the whole filesystem as its root.
+# SECOBSERVE_EXPORT_DIR defaults to a directory under the working directory, and at / that is unwritable.
 WORKDIR /home/secobserve
 
 EXPOSE 8931

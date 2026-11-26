@@ -105,10 +105,16 @@ def read_upload(path: str) -> tuple[str, bytes]:
         tuple[str, bytes]: The file's base name and its contents.
 
     Raises:
-        ValueError: if the file is outside the import directory, missing, not a
+        ValueError: if no import directory is configured, or the file is outside it, hidden, missing, not a
             regular file, empty, or larger than 64 MiB.
     """
-    root = Path(get_config().import_dir).resolve()
+    configured = get_config().import_dir
+    if not configured:
+        raise ValueError(
+            "Uploads are switched off: SECOBSERVE_IMPORT_DIR is not set, and the working directory is not a "
+            "default. An operator sets it to the directory holding the scan reports and restarts the server."
+        )
+    root = Path(configured).resolve()
     candidate = Path(path)
     resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
 
@@ -116,6 +122,11 @@ def read_upload(path: str) -> tuple[str, bytes]:
         raise ValueError(
             f"Refusing to read {resolved}: uploads are confined to {root}. "
             "Move the file there, or set SECOBSERVE_IMPORT_DIR to the directory holding your scan reports."
+        )
+    if any(part.startswith(".") for part in resolved.relative_to(root).parts):
+        raise ValueError(
+            f"Refusing to read {resolved}: a name starting with '.' is a hidden file or directory, which is where "
+            "credentials and tool state live, not scan reports. Rename the report if it really is one."
         )
     if not resolved.exists():
         raise ValueError(f"No such file: {resolved}")
