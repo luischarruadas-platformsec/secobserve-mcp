@@ -20,6 +20,7 @@ from .app import mcp
 from .client import RequestTimeoutError, SecObserveError, request, tool_errors
 from .exports import read_upload, write_export
 from .formatting import ResponseFormat, render_object
+from .tools_crud import require_deletes_enabled
 from .types import ApprovalStatus, MetricsAge, Severity, Status, VexJustification
 
 MAX_BULK = 250
@@ -1171,12 +1172,16 @@ async def secobserve_run_periodic_task(
     Error Handling:
         400 means the name is not registered -- call without 'task' for the list.
         409 means that task is already running; wait for it rather than retrying.
+        A housekeeping task deletes inactive branches with their observations, so
+        it is refused unless SECOBSERVE_ALLOW_DELETE is set.
         Requires superuser; a product token gets 403.
     """
     if not task:
         payload = await request("GET", "/periodic_tasks/registered_tasks/")
         return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
+    if "housekeeping" in task.lower():
+        require_deletes_enabled(f"'{task}' deletes inactive branches together with their observations. ")
     await request("POST", "/periodic_tasks/run/", json_body={"task": task})
     return (
         f"Queued background task '{task}'. Watch it with "

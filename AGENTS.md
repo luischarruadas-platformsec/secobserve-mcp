@@ -134,7 +134,8 @@ This is the most important invariant in the repository.
 
 ## Write and delete safety invariants
 
-- `secobserve_delete`, and any `secobserve_call_action` that uses DELETE or whose action name contains `delete`, are disabled unless `SECOBSERVE_ALLOW_DELETE` is set. Deletion in SecObserve cascades and cannot be undone.
+- `secobserve_delete`, and any `secobserve_call_action` that uses DELETE or whose `Action` has `deletes=True`, are disabled unless `SECOBSERVE_ALLOW_DELETE` is set. Deletion in SecObserve cascades and cannot be undone.
+- An action that removes records is registered with `deletes=True` whatever its name says; `scancodeio_projects.import_results` is one. The same switch gates `replace=True` on `secobserve_update`, any `*housekeeping*` field other than `housekeeping_protect: true`, and a housekeeping periodic task, because each deletes without sending a DELETE.
 - Deleting `products` / `product_groups` / `scancodeio_projects` additionally requires `confirm_name` to match the record's exact name (a ScanCode.io project's `project_name`), passed to the API as a `name` query parameter; the API itself verifies it.
 - `SECOBSERVE_READ_ONLY` defaults to on and is enforced in `client.request`, before any request is made, so it does not depend on each tool remembering to check.
 - A boolean setting that is neither on nor off raises `ConfigError` and stops the server at startup. Never read an unrecognised value as off: for read-only, TLS verification and the audit log, off is the unsafe side.

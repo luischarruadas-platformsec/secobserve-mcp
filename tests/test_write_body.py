@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 import respx
 
-from secobserve_mcp import schema
+from secobserve_mcp import config, schema
 from secobserve_mcp.tools_crud import secobserve_create, secobserve_update
 
 from .test_schema import API, SCHEMA
@@ -64,8 +65,12 @@ async def test_body_keys_pass_through_when_the_schema_is_unavailable() -> None:
 
 
 @respx.mock
-async def test_body_keys_pass_through_when_the_schema_has_no_body_for_the_method() -> None:
+async def test_body_keys_pass_through_when_the_schema_has_no_body_for_the_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """SCHEMA describes PATCH on a general rule but not PUT, so replace=True cannot be checked."""
+    monkeypatch.setenv(config.ENV_ALLOW_DELETE, "true")
+    config.get_config.cache_clear()
     schema._schema = None
     respx.get(f"{API}/oa3/schema/").mock(return_value=httpx.Response(200, json=SCHEMA))
     write = respx.put(f"{API}/general_rules/4/").mock(return_value=httpx.Response(200, json={"id": 4}))

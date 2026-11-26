@@ -34,6 +34,8 @@ class Action:
     detail: bool
     summary: str
     binary: bool = False
+    #: Removes records, so it needs SECOBSERVE_ALLOW_DELETE whatever its name or verb says.
+    deletes: bool = False
 
 
 @dataclass(frozen=True)
@@ -161,8 +163,10 @@ RESOURCES: dict[str, Resource] = {
             ),
             Action("observations_bulk_assessment", "POST", True, "Assess many observations of this product."),
             Action("observations_bulk_mark_duplicates", "POST", True, "Mark listed observations as duplicates."),
-            Action("observations_bulk_delete", "POST", True, "Delete listed observations of this product."),
-            Action("license_components_bulk_delete", "POST", True, "Delete listed license components."),
+            Action(
+                "observations_bulk_delete", "POST", True, "Delete listed observations of this product.", deletes=True
+            ),
+            Action("license_components_bulk_delete", "POST", True, "Delete listed license components.", deletes=True),
             Action("synchronize_issues", "POST", True, "Push observations to the configured issue tracker."),
             Action("export_observations_excel", "GET", True, "Observations as XLSX.", binary=True),
             Action("export_observations_csv", "GET", True, "Observations as CSV.", binary=True),
@@ -300,7 +304,7 @@ RESOURCES: dict[str, Resource] = {
             Action("approval", "PATCH", True, "Approve or reject one pending assessment."),
             Action("bulk_approval", "POST", False, "Approve or reject up to 250 pending assessments."),
             Action("count_approvals", "GET", False, "Number of assessments awaiting approval."),
-            Action("bulk_delete", "DELETE", False, "Delete up to 250 observation logs."),
+            Action("bulk_delete", "DELETE", False, "Delete up to 250 observation logs.", deletes=True),
         ),
     ),
     "evidences": Resource(
@@ -516,6 +520,7 @@ RESOURCES: dict[str, Resource] = {
                 True,
                 "Import the project's ScanCode.io results now, as its webhook does: license components missing from "
                 "the results are deleted. Returns new/updated/deleted counts; needs license management enabled.",
+                deletes=True,
             ),
         ),
     ),
