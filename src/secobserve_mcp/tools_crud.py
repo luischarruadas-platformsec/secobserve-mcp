@@ -25,6 +25,7 @@ from .registry import CREATE, DELETE, GET, LIST, RESOURCES, UPDATE, Resource, ge
 
 MAX_PAGE_SIZE = 100
 NAME_CONFIRMED_DELETES = {"products", "product_groups", "scancodeio_projects"}
+PROTECT_BRANCH = ("housekeeping_protect", True)
 
 
 #: Repeated verbatim on six tools; the wording is the same, so the alias is too.
@@ -51,12 +52,28 @@ def _require_op(resource_name: str, resource: Resource, op: str) -> None:
     )
 
 
-def _require_deletes_enabled() -> None:
+def require_deletes_enabled(why: str = "") -> None:
+    """Raise unless deletes are switched on. `why` says what makes a call a delete when its name does not."""
     if not get_config().allow_delete:
         raise SecObserveError(
-            "Deletes are disabled on this server (SECOBSERVE_ALLOW_DELETE is not set). "
+            f"{why}Deletes are disabled on this server (SECOBSERVE_ALLOW_DELETE is not set). "
             "Deletion in SecObserve cascades and is irreversible, so it must be enabled deliberately. "
             "Consider assessing observations as 'Not affected' or 'Risk accepted' instead."
+        )
+
+
+def _require_deletes_for_housekeeping(data: dict[str, Any]) -> None:
+    """Housekeeping settings are a delete with a delay: they pick the branches SecObserve removes on its own.
+
+    Shortening the retention on `settings` or a product, or lifting a branch's protection, deletes branches and
+    their observations at the next run without a single DELETE being sent. Protecting a branch is the one change
+    in that family that removes nothing.
+    """
+    touched = sorted(key for key, value in data.items() if "housekeeping" in key and (key, value) != PROTECT_BRANCH)
+    if touched:
+        require_deletes_enabled(
+            f"{', '.join(touched)} {'decides' if len(touched) == 1 else 'decide'} which branches SecObserve's "
+            "housekeeping deletes, together with their observations. "
         )
 
 
@@ -229,7 +246,8 @@ async def secobserve_list_resources(
         for action in resource.actions:
             level = "detail (needs id)" if action.detail else "collection"
             binary = ", returns a file" if action.binary else ""
-            lines.append(f"- action `{action.name}`: {action.method}, {level}{binary} -- {action.summary}")
+            gated = ", needs SECOBSERVE_ALLOW_DELETE" if action.deletes else ""
+            lines.append(f"- action `{action.name}`: {action.method}, {level}{binary}{gated} -- {action.summary}")
         lines.append("")
 
     if not shown:
@@ -595,12 +613,14 @@ async def secobserve_create(
 
     Error Handling:
         Refused with a clear message when the resource has no create operation, or
-        when SECOBSERVE_READ_ONLY is set. A key that is not a writable field ->
+        when the server is read-only. A housekeeping field is refused unless
+        SECOBSERVE_ALLOW_DELETE is set. A key that is not a writable field ->
         refused before the request, listing the writable fields. 400 responses
         are returned with the field-level detail from the API.
     """
     resource_def = get_resource(resource)
     _require_op(resource, resource_def, CREATE)
+    _require_deletes_for_housekeeping(data)
     await _validate_body(resource, "POST", resource_def.path, data)
 
     payload = await request("POST", resource_def.path, json_body=data)
@@ -630,14 +650,24 @@ async def secobserve_update(
     data: Annotated[dict[str, Any], Field(description="Fields to change.")],
     replace: Annotated[
         bool,
-        Field(description=("False sends PATCH (merge, the safe default). True sends PUT and blanks omitted fields.")),
+        Field(
+            description=(
+                "False sends PATCH (merge, the safe default). True sends PUT and blanks omitted fields, "
+                "which needs SECOBSERVE_ALLOW_DELETE."
+            )
+        ),
     ] = False,
     response_format: ResponseFormatArg = ResponseFormat.MARKDOWN,
 ) -> str:
     """Change fields of an existing SecObserve record.
 
     Defaults to PATCH so omitted fields keep their values; set replace=True only
-    when you intend PUT semantics, which blanks anything you leave out.
+    when you intend PUT semantics, which blanks anything you leave out and is
+    therefore refused unless SECOBSERVE_ALLOW_DELETE is set on the server.
+
+    Housekeeping fields (`*housekeeping*` on settings, products and branches)
+    decide which branches SecObserve deletes on its own, so changing one needs
+    SECOBSERVE_ALLOW_DELETE too. Setting `housekeeping_protect` to true does not.
 
     To change an observation's severity, status or priority, do NOT use this tool --
     use secobserve_assess_observation, which writes an observation log, honours the
@@ -647,7 +677,8 @@ async def secobserve_update(
         resource (str): Resource name supporting update.
         id (int): Primary key of the record.
         data (dict): Fields to change.
-        replace (bool): False = PATCH (default), True = PUT.
+        replace (bool): False = PATCH (default), True = PUT, which needs
+          SECOBSERVE_ALLOW_DELETE.
         response_format (ResponseFormat): "markdown" or "json".
 
     Returns:
@@ -662,6 +693,8 @@ async def secobserve_update(
 
     Error Handling:
         Refused when the resource has no update operation or the server is read-only.
+        replace=True, or a housekeeping field other than protecting a branch ->
+        refused unless SECOBSERVE_ALLOW_DELETE is set.
         A key that is not a writable field -> refused before the request, listing
         the writable fields; SecObserve would drop it and still answer success.
         400 responses carry the API's field-level validation detail.
@@ -669,6 +702,9 @@ async def secobserve_update(
     resource_def = get_resource(resource)
     _require_op(resource, resource_def, UPDATE)
 
+    if replace:
+        require_deletes_enabled("replace=True sends PUT, which blanks every field the body leaves out. ")
+    _require_deletes_for_housekeeping(data)
     method = "PUT" if replace else "PATCH"
     await _validate_body(resource, method, f"{resource_def.path}{{id}}/", data)
     payload = await request(method, f"{resource_def.path}{id}/", json_body=data)
@@ -736,7 +772,7 @@ async def secobserve_delete(
         delete operation, or when confirm_name is missing for a product, product
         group or ScanCode.io project. A 409 means something still references the record.
     """
-    _require_deletes_enabled()
+    require_deletes_enabled()
     resource_def = get_resource(resource)
     _require_op(resource, resource_def, DELETE)
 
@@ -840,8 +876,8 @@ async def secobserve_call_action(
     Error Handling:
         Unknown action -> error listing the resource's valid actions. Missing or
         stray id -> error saying which the action needs. Read-only mode blocks
-        every non-GET action. A DELETE, or an action whose name contains
-        "delete", is refused unless SECOBSERVE_ALLOW_DELETE is set.
+        every non-GET action. A DELETE, or an action the catalogue marks
+        "needs SECOBSERVE_ALLOW_DELETE", is refused unless that is set.
     """
     resource_def = get_resource(resource)
     action_def = resource_def.action(action)
@@ -858,8 +894,8 @@ async def secobserve_call_action(
         f"{resource_def.path}{id}/{action_def.name}/" if action_def.detail else f"{resource_def.path}{action_def.name}/"
     )
     verb = method or action_def.method
-    if verb == "DELETE" or "delete" in action_def.name:
-        _require_deletes_enabled()
+    if verb == "DELETE" or action_def.deletes or "delete" in action_def.name:
+        require_deletes_enabled()
 
     payload = await request(
         verb,

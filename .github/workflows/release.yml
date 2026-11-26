@@ -3,6 +3,8 @@ name: Release
 # Publishing runs on a tag so the version that ships is the version that was tagged.
 # No API token is stored anywhere: PyPI uses trusted publishing and the MCP Registry
 # uses GitHub OIDC, both authenticated by this workflow's identity.
+# That identity is why every action is pinned to a commit and the publisher binary to a checksum: whatever runs
+# in this job can publish as this project.
 on:
   push:
     tags: ["v*"]
@@ -17,9 +19,9 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
 
@@ -53,8 +55,8 @@ jobs:
         run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/secobserve-mcp/
 
       # arm64 is built under emulation, which QEMU has to provide.
-      - uses: docker/setup-qemu-action@v4.4.0
-      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Publish the container image
         # Before the registry step, not after: the registry pulls this image anonymously and reads its
@@ -72,9 +74,16 @@ jobs:
         # It re-validates everything against the live world: the PyPI version has to be visible, the image
         # has to be pullable anonymously, and both have to carry the ownership marker. PyPI's index is
         # eventually consistent, so give it room rather than failing a release on cache propagation.
+        env:
+          # A fixed release and its checksum, not `releases/latest` piped into tar. Bump both together, from
+          # https://github.com/modelcontextprotocol/registry/releases; the asset is the linux_amd64 one this runner needs.
+          MCP_PUBLISHER_VERSION: v1.8.9
+          MCP_PUBLISHER_SHA256: 4d527ca8f1ced0394c962dc925c2a4a4addef441cbefd62501c875e9481823a8
         run: |
-          curl -sSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/').tar.gz" \
-            | tar xz mcp-publisher
+          curl -fsSLo mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum --check --strict
+          tar xzf mcp-publisher.tar.gz mcp-publisher
           ./mcp-publisher login github-oidc
           for attempt in 1 2 3 4 5; do
             if ./mcp-publisher publish; then

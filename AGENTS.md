@@ -34,11 +34,12 @@ Do not expand into these without the user asking.
 - Python 3.11+ (uses `X | None`, `from __future__ import annotations` in every module).
 - Entry point: `secobserve-mcp = secobserve_mcp.__main__:main`.
 - MCP: **SDK 2.x**, pinned to one minor (`mcp>=2.2,<2.3`) because the per-request credential hangs off a hook the SDK marks provisional. The class is `MCPServer` in `mcp.server.mcpserver`, **not** `FastMCP` — that name is the 1.x API and is gone.
-- HTTP: one `httpx.AsyncClient` shared for the process lifetime, never one per request.
+- HTTP: one `httpx.AsyncClient` shared for the process lifetime, never one per request. Its cookie jar accepts nothing, because that one client serves every caller.
 - Validation: Pydantic v2 via `Annotated[..., Field(...)]` on each tool argument; the signature is the schema.
 - Tests: `pytest` + `pytest-asyncio` (`asyncio_mode = "auto"`) with `respx` mocking HTTP. Never call mutating endpoints on a real SecObserve instance from a test.
 - Lint/types: `ruff` (line-length 120) and `mypy --strict`, both clean before anything ships.
 - CI runs the same checks on every push and every pull request, and `release.yml` re-runs them on the tag, because the tagged commit is what ships.
+- Build inputs are pinned to content, not to names: every action in `.github/workflows` to a commit with its tag in a comment, the `mcp-publisher` binary to a release and its checksum, both images in the `Dockerfile` to a digest, and the image's dependencies to the hashes in `uv.lock`. The release job holds the publishing identity, so anything it runs unpinned can publish as this project.
 
 ## Code structure
 
@@ -130,17 +131,19 @@ This is the most important invariant in the repository.
 - Every error message must say **what to do next**: the offending field, the valid values, or the tool to use instead.
 - DRF 400 bodies are returned verbatim, because they already name the wrong field. Do not swallow or paraphrase them.
 - A 404 must mention that SecObserve hides records outside the caller's products, not just say "not found".
-- Never log the token, the `Authorization` header, or request bodies. `httpx` logs URLs at INFO to stderr, which is acceptable because auth lives in the header.
+- Never log the token, the `Authorization` header, request bodies or request URLs. A query string carries filter values and search text, so `client.py` holds the `httpx` logger at WARNING; the SDK sets the root logger to INFO, where `httpx` would log every URL.
 
 ## Write and delete safety invariants
 
-- `secobserve_delete`, and any `secobserve_call_action` that uses DELETE or whose action name contains `delete`, are disabled unless `SECOBSERVE_ALLOW_DELETE` is set. Deletion in SecObserve cascades and cannot be undone.
+- `secobserve_delete`, and any `secobserve_call_action` that uses DELETE or whose `Action` has `deletes=True`, are disabled unless `SECOBSERVE_ALLOW_DELETE` is set. Deletion in SecObserve cascades and cannot be undone.
+- An action that removes records is registered with `deletes=True` whatever its name says; `scancodeio_projects.import_results` is one. The same switch gates `replace=True` on `secobserve_update`, any `*housekeeping*` field other than `housekeeping_protect: true`, and a housekeeping periodic task, because each deletes without sending a DELETE.
 - Deleting `products` / `product_groups` / `scancodeio_projects` additionally requires `confirm_name` to match the record's exact name (a ScanCode.io project's `project_name`), passed to the API as a `name` query parameter; the API itself verifies it.
 - `SECOBSERVE_READ_ONLY` defaults to on and is enforced in `client.request`, before any request is made, so it does not depend on each tool remembering to check.
 - A boolean setting that is neither on nor off raises `ConfigError` and stops the server at startup. Never read an unrecognised value as off: for read-only, TLS verification and the audit log, off is the unsafe side.
 - `client.request` passes every parsed response through `redaction.redact`, which replaces credentials SecObserve stores for other systems (`api_key`, `password`, `webhook`, and any name ending in `_api_key`, `_password` or `_webhook`), and refuses a body that carries the placeholder. A tool never bypasses `client.request` to read one.
-- Uploads may only read files under `SECOBSERVE_IMPORT_DIR` (resolve, then compare `parents`). The reason is prompt injection: scan reports are third-party data, and without confinement an instruction planted in a report could talk an agent into uploading an unrelated local file to SecObserve.
-- Exports are written to `SECOBSERVE_EXPORT_DIR` under a basename sanitised to a single segment. A caller can never supply a path.
+- `--transport http` always passes its own `TransportSecuritySettings` to the SDK, with loopback names plus `SECOBSERVE_ALLOWED_HOSTS`. The SDK enables Host and Origin checks for a loopback bind only, so leaving the argument out switches them off wherever a container binds.
+- Uploads may only read files under `SECOBSERVE_IMPORT_DIR` (resolve, then compare `parents`), which has no default, and never a hidden file or directory. The reason is prompt injection: scan reports are third-party data, and without confinement an instruction planted in a report could talk an agent into uploading an unrelated local file to SecObserve.
+- Exports are written to `SECOBSERVE_EXPORT_DIR` under a basename sanitised to a single segment. A caller can never supply a path. The file is owner-only (`0600`) and a symbolic link at the target is refused, never followed.
 - Never change an observation's severity or status with `secobserve_update`; it must go through `assess` so the observation log and the approval workflow stay intact.
 - A tool with side effects must set `destructive_hint` correctly and state the side effect in its docstring.
 
@@ -282,7 +285,7 @@ A published version is permanent. PyPI does not allow re-uploading a version, so
 - `secobserve_trigger_scan` and `secobserve_api_import` block until the backend finishes. A timeout does not cancel the work in flight; check `vulnerability_checks` rather than retrying blind.
 - Nothing in CI runs against a real SecObserve. Every check is offline, so a change that only breaks against a live backend is found by someone using it. This is deliberate and it has a cost: the correctness bugs this repository has shipped were all found that way, not by a test.
 - Publishing is tokenless: PyPI trusted publishing plus GitHub OIDC for the registry. Both are configured on the provider side, not in this repo, so a fresh fork cannot release without setting them up.
-- The per-request credential and the audit log both hang off the MCP SDK's `Server.middleware`, which the SDK marks provisional. Three things guard it: the dependency is pinned to one SDK minor, the tests fail if the hook stops binding, and `app.py` drives a synthetic message through the chain at import and refuses to start when the credential did not bind. What that last one cannot see is a future transport bypassing `ServerRunner`, which every transport in 2.2 goes through.
+- The per-request credential and the audit log both hang off the MCP SDK's `Server.middleware`, which the SDK marks provisional. Three things guard it: the dependency is pinned to one SDK minor, the tests fail if the hook stops binding, and `app.py` drives a synthetic message through the chain at import and refuses to start when the credential did not bind; when the check cannot run at all, stdio still starts and `--transport http` does not. What that last one cannot see is a future transport bypassing `ServerRunner`, which every transport in 2.2 goes through.
 - The OpenAPI schema is cached in-process for `SCHEMA_TTL_SECONDS` (300). A backend upgraded mid-run is picked up within that window, not immediately; restart the server if you need it now. Callers past the TTL may refetch concurrently — the GET is idempotent, and a module-level `asyncio.Lock` would break across the event loops the tests create.
 
 Do not hide these limitations in tool descriptions or documentation when making related changes.

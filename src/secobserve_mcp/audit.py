@@ -1,4 +1,4 @@
-"""One JSON line per tool call, on stderr: which tool, which caller, which resource, how long, how it ended.
+"""One JSON line per tool call, on stderr: which tool, which caller, which record, how long, how it ended.
 
 SecObserve's observation log records writes only, so a read is invisible there -- and a read is how data leaves.
 This is the server's own record. It is written from a middleware rather than from the tools, so every tool is
@@ -19,6 +19,7 @@ from typing import Any
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 
+from .client import watch_expected_failures
 from .config import CREDENTIAL_HEADER, ENV_AUDIT_LOG, ConfigError, _bool_env, request_auth_header
 from .registry import RESOURCES
 
@@ -84,6 +85,17 @@ def _resource(arguments: Any) -> str | None:
     return name if isinstance(name, str) and name in RESOURCES else None
 
 
+def _record_id(arguments: Any) -> int | None:
+    """The `id` argument, and only when it is a number: with `resource` it says which record was read or changed.
+
+    A primary key carries nothing a caller can write text into, which is what keeps this as safe as `resource`.
+    """
+    if not isinstance(arguments, dict):
+        return None
+    value = arguments.get("id")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def _emit(ctx: ServerRequestContext[Any, Any], outcome: str, elapsed: float) -> None:
     try:
         params = ctx.params or {}
@@ -94,6 +106,7 @@ def _emit(ctx: ServerRequestContext[Any, Any], outcome: str, elapsed: float) -> 
             "caller": caller,
             "claimed_username": claimed_username,
             "resource": _resource(params.get("arguments")),
+            "id": _record_id(params.get("arguments")),
             "outcome": outcome,
             "ms": round(elapsed * 1000, 1),
         }
@@ -114,10 +127,11 @@ def _enabled() -> bool:
 async def audit_tool_calls(ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:
     """Write one line per tool call, timed around the whole call so a tool that raises is timed like one that does not.
 
-    `outcome` is what this layer can honestly observe: `returned` when the tool produced a result, `error` when it
-    raised and the SDK turned that into an error result, `rejected` when the call never reached the tool. An expected
-    failure that `@tool_errors` returned as text is a `returned`, because reading the string to tell the difference
-    would tie this layer to the wording of every error message in the repository.
+    `outcome` is what this layer can honestly observe: `returned` when the tool produced a result, `failed` when
+    `@tool_errors` turned an expected failure into text, `error` when the tool raised and the SDK turned that into
+    an error result, `rejected` when the call never reached the tool. `failed` comes from `@tool_errors` itself and
+    not from reading the text, which would tie this layer to the wording of every error message in the repository.
+    A write a guard refused and a write that happened must not look alike in the one record that covers both.
     """
     if ctx.method != "tools/call" or not _enabled():
         return await call_next(ctx)
@@ -125,8 +139,12 @@ async def audit_tool_calls(ctx: ServerRequestContext[Any, Any], call_next: CallN
     started = time.perf_counter()
     outcome = "rejected"
     try:
-        result = await call_next(ctx)
-        outcome = "error" if isinstance(result, dict) and result.get("isError") else "returned"
+        with watch_expected_failures() as failures:
+            result = await call_next(ctx)
+        if isinstance(result, dict) and result.get("isError"):
+            outcome = "error"
+        else:
+            outcome = "failed" if failures else "returned"
         return result
     finally:
         _emit(ctx, outcome, time.perf_counter() - started)

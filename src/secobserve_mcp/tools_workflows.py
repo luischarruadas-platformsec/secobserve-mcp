@@ -20,6 +20,7 @@ from .app import mcp
 from .client import RequestTimeoutError, SecObserveError, request, tool_errors
 from .exports import read_upload, write_export
 from .formatting import ResponseFormat, render_object
+from .tools_crud import require_deletes_enabled
 from .types import ApprovalStatus, MetricsAge, Severity, Status, VexJustification
 
 MAX_BULK = 250
@@ -763,8 +764,9 @@ async def secobserve_upload_file(
     the report, and records a vulnerability check. Creating observations by hand
     with secobserve_create does none of that.
 
-    The file must live under the server's import directory (SECOBSERVE_IMPORT_DIR,
-    the working directory by default) and be at most 64 MiB.
+    The file must live under the server's import directory (SECOBSERVE_IMPORT_DIR;
+    uploads are off until an operator sets it), must not be a hidden file, and
+    must be at most 64 MiB.
 
     Args:
         kind (str): "observations", "sbom" or "vex".
@@ -794,8 +796,8 @@ async def secobserve_upload_file(
           (use secobserve_api_import).
 
     Error Handling:
-        A path outside the import directory, a missing, empty or oversized file is
-        refused before any request is made. 400 usually means the parser could not
+        No import directory configured, a path outside it, a hidden, missing,
+        empty or oversized file is refused before any request is made. 400 usually means the parser could not
         read the format -- check the product's expected parser with
         secobserve_list(resource="parsers"). Read-only mode blocks the call.
     """
@@ -1171,12 +1173,16 @@ async def secobserve_run_periodic_task(
     Error Handling:
         400 means the name is not registered -- call without 'task' for the list.
         409 means that task is already running; wait for it rather than retrying.
+        A housekeeping task deletes inactive branches with their observations, so
+        it is refused unless SECOBSERVE_ALLOW_DELETE is set.
         Requires superuser; a product token gets 403.
     """
     if not task:
         payload = await request("GET", "/periodic_tasks/registered_tasks/")
         return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
+    if "housekeeping" in task.lower():
+        require_deletes_enabled(f"'{task}' deletes inactive branches together with their observations. ")
     await request("POST", "/periodic_tasks/run/", json_body={"task": task})
     return (
         f"Queued background task '{task}'. Watch it with "

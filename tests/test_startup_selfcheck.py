@@ -25,7 +25,7 @@ async def passthrough(ctx: ServerRequestContext[Any, Any], call_next: CallNext) 
 
 def test_the_check_passes_on_the_chain_this_server_composes(capsys: pytest.CaptureFixture[str]) -> None:
     """Silence is the contract: a passing check says nothing, so nothing of the credential can reach a log line."""
-    app.verify_middleware_binds_credential()
+    assert app.verify_middleware_binds_credential() is True
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -75,7 +75,7 @@ def test_a_check_that_cannot_run_warns_instead_of_failing(
 
     monkeypatch.setattr("mcp.server.runner.serve_one", boom)
 
-    app.verify_middleware_binds_credential()
+    assert app.verify_middleware_binds_credential() is False
 
     warning = capsys.readouterr().err
     assert "could not run" in warning
@@ -114,3 +114,33 @@ def test_the_synthetic_credential_is_not_shaped_like_one() -> None:
     assert scheme == "APIToken"
     assert "not-a-token" in token
     assert token.count(".") == 0
+
+
+def test_http_refuses_to_serve_when_the_check_could_not_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Tolerating an unverifiable check is right for one caller and wrong for many: there it fails closed."""
+    from secobserve_mcp.__main__ import main
+
+    monkeypatch.setattr(app, "MIDDLEWARE_VERIFIED", False)
+    monkeypatch.setattr(app.mcp, "run", lambda **kwargs: pytest.fail("the server started"))
+    monkeypatch.setattr("sys.argv", ["secobserve-mcp", "--transport", "http", "--shared-identity"])
+
+    assert main() == 2
+    assert "could not run" in capsys.readouterr().err
+
+
+def test_stdio_still_starts_when_the_check_could_not_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    from secobserve_mcp.__main__ import main
+
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(app, "MIDDLEWARE_VERIFIED", False)
+    monkeypatch.setattr(app.mcp, "run", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr("sys.argv", ["secobserve-mcp"])
+
+    assert main() == 0
+    assert calls == [{}]
+
+
+def test_the_import_time_result_is_what_main_reads() -> None:
+    assert app.MIDDLEWARE_VERIFIED is True

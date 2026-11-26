@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any
 
 import httpx
@@ -22,6 +26,10 @@ from .redaction import REDACTED, carries_placeholder, redact
 # httpx resolves dot segments and drops a fragment, so any of these lets a caller-supplied id move the request to
 # another endpoint, or out of /api with the credential attached.
 _UNSAFE_PATH = re.compile(r"[?#%\\]|//|(^|/)\.{1,2}(/|$)")
+
+# httpx logs each request URL at INFO and the SDK sets the root logger there. The query string carries filter
+# values and search text, which are product names and whatever else a caller asked about.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _client: httpx.AsyncClient | None = None
 
@@ -47,6 +55,9 @@ def get_client() -> httpx.AsyncClient:
             timeout=config.timeout,
             verify=config.verify_ssl,
             follow_redirects=False,
+            # One client serves every caller and SecObserve lists session authentication among its schemes, so a
+            # cookie kept from one caller's response would ride along on the next caller's request. This jar keeps none.
+            cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])),
         )
     return _client
 
@@ -215,6 +226,28 @@ async def request(
         return {"raw": response.text[:2000]}
 
 
+# A shared list rather than a flag: the SDK may run a tool in a copy of the caller's context, where a value set
+# inside the tool never reaches the caller, while an object both sides hold does.
+_expected_failures: ContextVar[list[str] | None] = ContextVar("secobserve_expected_failures", default=None)
+
+
+@contextmanager
+def watch_expected_failures() -> Iterator[list[str]]:
+    """Collect the expected failures `tool_errors` turns into text inside this block, by exception type."""
+    seen: list[str] = []
+    token = _expected_failures.set(seen)
+    try:
+        yield seen
+    finally:
+        _expected_failures.reset(token)
+
+
+def _note_expected_failure(exc: Exception) -> None:
+    seen = _expected_failures.get()
+    if seen is not None:
+        seen.append(type(exc).__name__)
+
+
 def tool_errors(func: Callable[..., Awaitable[str]]) -> Callable[..., Awaitable[str]]:
     """Return expected failures as text instead of raising them.
 
@@ -229,8 +262,10 @@ def tool_errors(func: Callable[..., Awaitable[str]]) -> Callable[..., Awaitable[
         try:
             return await func(*args, **kwargs)
         except KeyError as exc:
+            _note_expected_failure(exc)
             return f"Error: {exc.args[0] if exc.args else exc}"
         except (SecObserveError, ConfigError, ValueError) as exc:
+            _note_expected_failure(exc)
             return f"Error: {exc}"
 
     return wrapper

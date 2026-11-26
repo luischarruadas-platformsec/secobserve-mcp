@@ -11,14 +11,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from . import __version__
 from .config import (
     ENV_ALLOW_DELETE,
+    ENV_ALLOWED_HOSTS,
     ENV_API_TOKEN,
     ENV_AUDIT_LOG,
     ENV_BASE_URL,
@@ -33,6 +39,9 @@ from .config import (
     get_config,
 )
 
+if TYPE_CHECKING:
+    from mcp.server.transport_security import TransportSecuritySettings
+
 EPILOG = f"""environment:
   {ENV_BASE_URL}     SecObserve base URL without /api (default http://localhost:8000)
   {ENV_API_TOKEN}    user or product API token (recommended)
@@ -41,9 +50,10 @@ EPILOG = f"""environment:
   {ENV_VERIFY_SSL}   set to false only for a self-signed dev certificate
   {ENV_READ_ONLY}    every write is refused by default; set to false to allow writes
   {ENV_ALLOW_DELETE} set to true to enable secobserve_delete and bulk-delete actions (deletes cascade)
-  {ENV_IMPORT_DIR}   directory uploads may be read from (default: working directory)
+  {ENV_IMPORT_DIR}   directory uploads may be read from; uploads are off until it is set
   {ENV_EXPORT_DIR}   directory exports are written to (default: ./secobserve-exports)
   {ENV_AUDIT_LOG}    one JSON line per tool call on stderr; set to false to switch it off
+  {ENV_ALLOWED_HOSTS} Host names --transport http answers to besides localhost, comma-separated
 
 A boolean is true/false, 1/0, yes/no or on/off. Any other value is refused at startup.
 """
@@ -60,10 +70,40 @@ SHARED_IDENTITY_FLAG = "--shared-identity"
 
 CLIENTS = ("claude", "codex", "json", "vscode")
 
-# Once `uv tool install` has created a persistent environment, a bare `uvx secobserve-mcp` runs that pinned copy
-# forever. `@latest` revalidates against the index on every launch; `--isolated` only skips the tool environment and
-# may still serve a cached build.
-PACKAGE_SPEC = "secobserve-mcp@latest"
+PACKAGE = "secobserve-mcp"
+
+
+def _checkout() -> str | None:
+    """The checkout this install runs from, when it was installed from one that carries a lockfile.
+
+    PEP 610 records where a distribution came from when that was not an index: `uv sync` and `pip install -e .`
+    both write `direct_url.json` with the directory.
+    """
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    try:
+        origin = json.loads(distribution(PACKAGE).read_text("direct_url.json") or "{}")
+    except (PackageNotFoundError, ValueError):
+        return None
+    url = origin.get("url", "") if isinstance(origin, dict) else ""
+    if "dir_info" not in origin or not url.startswith("file://"):
+        return None
+    path = Path(url2pathname(urlsplit(url).path))
+    return str(path) if (path / "uv.lock").is_file() else None
+
+
+def _launch_command() -> list[str]:
+    """The argv a client should start this install with: the code that printed the snippet, and no other.
+
+    `secobserve-mcp@latest` fetched whatever the index held at every launch into a process holding the token, so
+    what a client ran had been read by nobody. From a checkout the answer is that checkout and its lockfile; from
+    an index it is this exact version, and moving off it is an edit someone makes on purpose.
+    """
+    checkout = _checkout()
+    if checkout:
+        return ["uv", "run", "--frozen", "--no-dev", "--project", checkout, PACKAGE]
+    return ["uvx", f"{PACKAGE}=={__version__}"]
+
 
 PYPI_JSON_URL = "https://pypi.org/pypi/secobserve-mcp/json"
 PYPI_TIMEOUT_SECONDS = 3.0
@@ -77,19 +117,22 @@ def _print_config(client: str) -> int:
     base_url = get_config().base_url
     env = {ENV_BASE_URL: base_url, ENV_API_TOKEN: TOKEN_PLACEHOLDER}
 
+    command, *arguments = _launch_command()
+
     if client == "claude":
         flags = " ".join(f"--env {k}={v}" for k, v in env.items())
-        print(f"claude mcp add secobserve {flags} -- uvx {PACKAGE_SPEC}")
+        print(f"claude mcp add secobserve {flags} -- {shlex.join([command, *arguments])}")
     elif client == "codex":
         pairs = ", ".join(f'{k} = "{v}"' for k, v in env.items())
         print("[mcp_servers.secobserve]")
-        print('command = "uvx"')
-        print(f'args = ["{PACKAGE_SPEC}"]')
+        # A JSON string is a valid TOML basic string, which matters once an argument is a path.
+        print(f"command = {json.dumps(command)}")
+        print(f"args = {json.dumps(arguments)}")
         print(f"env = {{ {pairs} }}")
     else:
         # VS Code keys this "servers"; everyone else kept "mcpServers".
         key = "servers" if client == "vscode" else "mcpServers"
-        block = {key: {"secobserve": {"command": "uvx", "args": [PACKAGE_SPEC], "env": env}}}
+        block = {key: {"secobserve": {"command": command, "args": arguments, "env": env}}}
         print(json.dumps(block, indent=2))
 
     print(f"\nReplace {TOKEN_PLACEHOLDER}; create one with", file=sys.stderr)
@@ -133,7 +176,7 @@ async def _report_install() -> None:
 
     if _runs_from_uv_tool_env():
         print("  install: a uv tool environment, which `uvx secobserve-mcp` keeps running instead of the latest")
-        print(f"  fix: uv tool upgrade secobserve-mcp, or point the client at `uvx {PACKAGE_SPEC}`")
+        print(f"  fix: uv tool upgrade {PACKAGE}, or point the client at `uvx {PACKAGE}=={latest or __version__}`")
 
 
 async def _check() -> int:
@@ -173,6 +216,46 @@ def _shared_identity_refusal(host: str, port: int) -> str:
         "\n"
         "A container needs the whole line too, because arguments to `docker run` replace CMD."
     )
+
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+
+
+def _cleartext_warning(base_url: str) -> str | None:
+    """A warning when the token would cross a network unencrypted, None when it stays on this machine or uses TLS."""
+    parts = urlsplit(base_url)
+    host = parts.hostname or ""
+    if parts.scheme != "http" or host == "localhost" or host.endswith(".localhost"):
+        return None
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return None
+    except ValueError:
+        pass
+    return (
+        f"Warning: {ENV_BASE_URL} is http:// to {host}, so the credential and every finding cross the network "
+        "unencrypted. Use https://; plain http is for a SecObserve on this machine."
+    )
+
+
+def _transport_security(extra_hosts: tuple[str, ...]) -> TransportSecuritySettings:
+    """Host and Origin checks that hold on every bind address.
+
+    The SDK switches them on by itself for a loopback bind only. A container has to bind 0.0.0.0, and there the SDK
+    answers any Host and any Origin, so a web page that rebinds its own name to this port reads SecObserve through
+    the browser of whoever opened it. Loopback names always pass, which is what a published container port is
+    reached by; every other name a client uses is the operator's to list.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    hosts: list[str] = []
+    origins: list[str] = []
+    for host in (*LOOPBACK_HOSTS, *extra_hosts):
+        has_port = ":" in host and not host.endswith("]") and host.rpartition(":")[2].isdigit()
+        for name in (host,) if has_port else (host, f"{host}:*"):
+            hosts.append(name)
+            origins.extend((f"http://{name}", f"https://{name}"))
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins)
 
 
 def _force_read_only() -> None:
@@ -222,7 +305,7 @@ def main() -> int:
             return 2
 
     _load_tools()
-    from .app import mcp
+    from .app import MIDDLEWARE_VERIFIED, mcp
 
     try:
         config = get_config()
@@ -234,10 +317,22 @@ def main() -> int:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
 
+    if warning := _cleartext_warning(config.base_url):
+        print(warning, file=sys.stderr)
+
     if args.check:
         return asyncio.run(_check())
 
     if args.transport == "http":
+        if not MIDDLEWARE_VERIFIED:
+            print(
+                "Refusing to start: --transport http serves more than one caller, and the check that each call is "
+                "served with the credential it carried could not run on this mcp release (see the message above). "
+                "Run over stdio, or install an mcp release this server was tested against (`mcp>=2.2,<2.3`).",
+                file=sys.stderr,
+            )
+            return 2
+        allowed_hosts = config.allowed_hosts
         if config.api_token or config.jwt:
             if not args.shared_identity:
                 print(_shared_identity_refusal(args.host, args.port), file=sys.stderr)
@@ -248,12 +343,20 @@ def main() -> int:
                 f"{ENV_API_TOKEN}/{ENV_JWT}; this process refuses every write.",
                 file=sys.stderr,
             )
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            also = f" and {', '.join(allowed_hosts)}" if allowed_hosts else ""
+            print(
+                f"Bound to {args.host}:{args.port}; requests are answered for the Host names localhost, 127.0.0.1, "
+                f"[::1]{also}. A client using any other name gets 421 until it is listed in {ENV_ALLOWED_HOSTS}.",
+                file=sys.stderr,
+            )
         mcp.run(
             transport="streamable-http",
             host=args.host,
             port=args.port,
             stateless_http=True,
             json_response=True,
+            transport_security=_transport_security(allowed_hosts),
         )
     else:
         mcp.run()

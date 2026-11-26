@@ -37,9 +37,12 @@ spec:
               value: {{ .Values.secobserve.readOnly | quote }}
             - name: SECOBSERVE_ALLOW_DELETE
               value: {{ .Values.secobserve.allowDelete | quote }}
+            # The Service's own names, plus whatever else the gateway calls it; any other Host header is answered with 421.
+            - name: SECOBSERVE_ALLOWED_HOSTS
+              value: {{ concat (list .Release.Name (printf "%s.%s" .Release.Name .Release.Namespace) (printf "%s.%s.svc" .Release.Name .Release.Namespace) (printf "%s.%s.svc.cluster.local" .Release.Name .Release.Namespace)) (.Values.secobserve.allowedHosts | default list) | join "," | quote }}
             - name: SECOBSERVE_EXPORT_DIR
               value: /tmp/secobserve-exports
-            # Uploads are confined to this directory; the default is the working directory, which is / in this image.
+            # Uploads are confined to this directory and are off without it.
             - name: SECOBSERVE_IMPORT_DIR
               value: /tmp/secobserve-imports
           # /healthz never calls SecObserve, so readiness only says the listener is up and a SecObserve outage never pulls this pod out of the Service.

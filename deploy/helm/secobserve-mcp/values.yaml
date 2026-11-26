@@ -19,6 +19,8 @@ secobserve:
   # One token serves every caller of this port, so writes stay off; `--shared-identity` in args forces this regardless.
   readOnly: true
   allowDelete: false
+  # Host names the server answers to besides its own Service names, which the chart always lists. Any other Host header gets 421.
+  allowedHosts: []
 
 networkPolicy:
   # Required, and there is no way to render an empty selector: the HTTP transport has no authentication of its own.

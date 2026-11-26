@@ -65,7 +65,7 @@ Each one carries the caveats that decide whether the report is right: metrics co
 uvx secobserve-mcp --help
 ```
 
-`uvx` downloads and runs it without installing anything permanently. In VS Code: [one-click install](https://vscode.dev/redirect/mcp/install?name=secobserve&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22secobserve-mcp%40latest%22%5D%7D).
+`uvx` downloads and runs it without installing anything permanently.
 
 To put it on your `PATH` instead:
 
@@ -73,9 +73,17 @@ To put it on your `PATH` instead:
 uv tool install secobserve-mcp
 ```
 
-Once you have done that, `uv tool` owns the name: a bare `uvx secobserve-mcp` runs that pinned copy forever and never notices a newer release, so keep it current with `uv tool upgrade secobserve-mcp`.
-The client configurations below therefore say `uvx secobserve-mcp@latest`, which revalidates against PyPI on each launch — once per client session, not once per command.
-`--check` deliberately stays on the bare name, because its job is to report on the copy your clients are actually running.
+Once you have done that, `uv tool` owns the name: a bare `uvx secobserve-mcp` runs that copy and never notices a newer release, so keep it current with `uv tool upgrade secobserve-mcp`.
+
+A client configuration pins what it runs. `secobserve-mcp@latest` would fetch whatever the index holds at every launch into a process that holds your SecObserve token, so the code a client runs would have been read by nobody. `--print-config` therefore prints `uvx secobserve-mcp==<the version that printed it>`, and moving to a newer release is an edit you make after `--check` reports one.
+
+`uvx` still resolves the dependencies afresh each time it builds an environment. To pin those too, or to run code you reviewed in a fork, run from a checkout, which uses `uv.lock`:
+
+```bash
+uv run --frozen --no-dev --project /path/to/secobserve-mcp secobserve-mcp
+```
+
+`--print-config` prints that form by itself when it runs from a checkout.
 
 From a checkout, for development:
 
@@ -87,16 +95,17 @@ uv venv && uv pip install -e ".[dev]"
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `SECOBSERVE_BASE_URL` | `http://localhost:8000` | Base URL **without** `/api`. |
+| `SECOBSERVE_BASE_URL` | `http://localhost:8000` | Base URL **without** `/api`. Plain `http://` to another machine sends the token unencrypted and is warned about at startup. |
 | `SECOBSERVE_API_TOKEN` | — | User or product API token. Recommended. |
 | `SECOBSERVE_JWT` | — | Alternative to an API token. |
 | `SECOBSERVE_TIMEOUT` | `60` | Seconds. SecObserve imports and scans inside the request, and a timeout does not cancel one; raise it to get the counts back from the call itself. |
 | `SECOBSERVE_VERIFY_SSL` | `true` | Set false only for a self-signed dev certificate. |
 | `SECOBSERVE_READ_ONLY` | `true` | Every non-GET call is refused until this is set to `false`. |
-| `SECOBSERVE_ALLOW_DELETE` | `false` | `secobserve_delete` and the bulk-delete actions are off until this is set. |
-| `SECOBSERVE_IMPORT_DIR` | working directory | Uploads may only be read from this tree. |
+| `SECOBSERVE_ALLOW_DELETE` | `false` | Everything that removes records is off until this is set: `secobserve_delete`, the deleting actions, `replace=True` on update, housekeeping settings and the housekeeping task. |
+| `SECOBSERVE_IMPORT_DIR` | — | Uploads may only be read from this tree, and are off until it is set. Hidden files are refused. |
 | `SECOBSERVE_EXPORT_DIR` | `./secobserve-exports` | Exports and VEX documents are written here. |
 | `SECOBSERVE_AUDIT_LOG` | `true` | One JSON line per tool call on stderr. `false` switches it off. |
+| `SECOBSERVE_ALLOWED_HOSTS` | — | `--transport http` only: the `Host` names it answers to besides `localhost`, `127.0.0.1` and `[::1]`, comma-separated, each `name` or `name:port`. |
 
 A boolean is `true`/`false`, `1`/`0`, `yes`/`no` or `on`/`off`. Any other value stops the server at startup instead of being read as off, because read as off `SECOBSERVE_VERIFY_SSL=ture` would disable certificate checks.
 
@@ -120,7 +129,7 @@ That last part is the only place this server calls pypi.org, it needs one short-
 ## Run as a container
 
 ```bash
-docker run --rm -p 8931:8931 \
+docker run --rm -p 127.0.0.1:8931:8931 \
   -e SECOBSERVE_BASE_URL=https://secobserve.example.com \
   -e SECOBSERVE_API_TOKEN=... \
   ghcr.io/nh4ttruong/secobserve-mcp \
@@ -133,6 +142,9 @@ The image is built for `linux/amd64` and `linux/arm64`, runs as a non-root user,
 `--shared-identity` is required and not in the image's default command: the token is baked into the environment, so every caller of the port acts as that one SecObserve identity, and the server refuses to start over HTTP until someone says that is intended.
 It then **refuses every write**, because an assessment made under a shared token records the wrong actor in the observation log and in four-eyes approval.
 Arguments to `docker run` replace `CMD` rather than extend it, which is why the transport flags are repeated above.
+
+`-p 127.0.0.1:8931:8931` publishes the port on this machine only; a bare `-p 8931:8931` offers it, unauthenticated, to the whole network.
+The server checks the `Host` and `Origin` of every request on every bind address, so a web page that rebinds its own name to this port is refused with `421`. Loopback names always pass; a client that reaches it by any other name gets `421` until that name is in `SECOBSERVE_ALLOWED_HOSTS`.
 
 Keep it behind a gateway that authenticates the caller, and off any public port.
 For a single user, `uvx` over stdio is the better fit: one process, one token, and writes once `SECOBSERVE_READ_ONLY=false` is set.
@@ -154,7 +166,7 @@ mcp.json` writes a clean file.
 ### Claude Code
 
 ```bash
-claude mcp add secobserve --env SECOBSERVE_BASE_URL=http://localhost:8000 --env SECOBSERVE_API_TOKEN=... -- uvx secobserve-mcp@latest
+claude mcp add secobserve --env SECOBSERVE_BASE_URL=http://localhost:8000 --env SECOBSERVE_API_TOKEN=... -- uvx secobserve-mcp==<version>
 ```
 
 ### Codex CLI
@@ -164,7 +176,7 @@ In `~/.codex/config.toml`:
 ```toml
 [mcp_servers.secobserve]
 command = "uvx"
-args = ["secobserve-mcp@latest"]
+args = ["secobserve-mcp==<version>"]
 env = { SECOBSERVE_BASE_URL = "http://localhost:8000", SECOBSERVE_API_TOKEN = "..." }
 ```
 
@@ -177,7 +189,7 @@ Most clients take the same JSON shape:
   "mcpServers": {
     "secobserve": {
       "command": "uvx",
-      "args": ["secobserve-mcp@latest"],
+      "args": ["secobserve-mcp==<version>"],
       "env": {
         "SECOBSERVE_BASE_URL": "http://localhost:8000",
         "SECOBSERVE_API_TOKEN": "..."
@@ -212,8 +224,8 @@ Expected failures come back as tool *text*, not as a raised exception: MCP repor
 Every tool call writes one JSON line to stderr. SecObserve's own observation log records writes only, so without this a read — which is how data leaves — leaves no trace anywhere.
 
 ```json
-{"ts":"2026-09-20T19:01:06.474+00:00","tool":"secobserve_list","caller":"apitoken:82fd9d5b1ae9","claimed_username":null,"resource":"observations","outcome":"returned","ms":37.0}
-{"ts":"2026-09-20T19:01:06.518+00:00","tool":"secobserve_list","caller":"jwt:09f002a0620f","claimed_username":"alice@example.com","resource":"observations","outcome":"returned","ms":0.9}
+{"ts":"2026-09-20T19:01:06.474+00:00","tool":"secobserve_get","caller":"apitoken:82fd9d5b1ae9","claimed_username":null,"resource":"observations","id":8123,"outcome":"returned","ms":37.0}
+{"ts":"2026-09-20T19:01:06.518+00:00","tool":"secobserve_list","caller":"jwt:09f002a0620f","claimed_username":"alice@example.com","resource":"observations","id":null,"outcome":"returned","ms":0.9}
 ```
 
 | Key | Meaning |
@@ -221,23 +233,25 @@ Every tool call writes one JSON line to stderr. SecObserve's own observation log
 | `caller` | `<source>:<digest>`, where source is `apitoken` or `jwt` for a credential the request carried in `X-SecObserve-Token`, and `server` for the process's own credential (stdio, or HTTP with no header). `unknown` when no credential could be read at all. |
 | `claimed_username` | The `username` claim of a JWT, for a line that names a person. **Unverified**: the token is the caller's own data and only SecObserve holds the secret. |
 | `resource` | The `resource` argument, and only when the catalogue knows that name. `null` for a tool that takes none, and for a value this server does not recognise. |
-| `outcome` | `returned` when the tool produced a result, `error` when it raised and MCP reported an error result, `rejected` when the call never reached the tool. |
+| `id` | The `id` argument when it is a number, so `resource` and `id` together name the record. `null` for a tool that takes none. |
+| `outcome` | `returned` when the tool produced a result, `failed` when it returned an expected failure as text (a guard refused the call, or SecObserve rejected it), `error` when it raised and MCP reported an error result, `rejected` when the call never reached the tool. |
 | `ms` | Wall time around the whole call, measured the same way whether the tool returns or raises. |
 
 The digest is the first 12 hex characters of a domain-separated SHA-256 of the credential. It correlates one caller's lines with each other and with nothing else: someone holding the log can tell two calls apart, group a caller's reads, and confirm a token they *already* have was used here — they cannot recover the credential, and cannot map a digest to a SecObserve user without one. That rests on the credential being high-entropy, which an issued API token is and a hand-written one is not.
 
-Arguments are never logged, and neither is the credential, the `Authorization` header or a request body. `resource` is the single exception, and the catalogue check is what makes it one: a value the caller invented is dropped rather than written into the log.
+Arguments are never logged, and neither is the credential, the `Authorization` header, a request body or a request URL. `resource` and `id` are the two exceptions: a resource the catalogue does not know and an id that is not a number are dropped rather than written into the log.
 
-`SECOBSERVE_AUDIT_LOG=false` switches the whole thing off. It is on by default because a record that has to be remembered is missing exactly when it is needed, and stderr is not the protocol channel, so no stdio client is disturbed. A tool that returns an expected failure as text is a `returned`: telling those apart would mean reading the string, which would tie the audit layer to the wording of every error message in the repository.
+`SECOBSERVE_AUDIT_LOG=false` switches the whole thing off. It is on by default because a record that has to be remembered is missing exactly when it is needed, and stderr is not the protocol channel, so no stdio client is disturbed. An expected failure is a `failed` because `@tool_errors` reports it, not because the audit layer reads the text.
 
 ## Security
 
 - The server's own credential comes from the environment and is never returned by a tool.
 - Credentials SecObserve stores for other systems are replaced with `[redacted by secobserve-mcp]` in every tool result: any field named `api_key`, `password` or `webhook`, or ending in `_api_key`, `_password` or `_webhook`, at any depth. A request body carrying that placeholder is refused, so a read-modify-write cannot overwrite the stored value with it. File exports are the backend's own bytes and are not redacted.
 - Writes are refused by default; `SECOBSERVE_READ_ONLY=false` allows them.
-- `secobserve_delete` is disabled by default; deleting a product or product group additionally requires `confirm_name` to match the record's exact name, which the API itself verifies. Deletion cascades and is irreversible.
-- Uploads are confined to `SECOBSERVE_IMPORT_DIR`; exports are written to `SECOBSERVE_EXPORT_DIR` under a sanitised single-segment filename.
-- HTTP transport binds to `127.0.0.1` by default, and refuses to start on a credential from the environment unless `--shared-identity` accepts that every caller shares it; it is then read-only.
+- Every call that removes records needs `SECOBSERVE_ALLOW_DELETE`, whatever it is called: `secobserve_delete`, an action that is a DELETE or that the catalogue marks as deleting (the ScanCode.io `import_results` among them), `secobserve_update` with `replace=True`, a change to a housekeeping setting other than protecting a branch, and running the housekeeping task.
+- Deleting a product or product group additionally requires `confirm_name` to match the record's exact name, which the API itself verifies. Deletion cascades and is irreversible.
+- Uploads are confined to `SECOBSERVE_IMPORT_DIR`, are off until it is set, and never read a hidden file; exports are written to `SECOBSERVE_EXPORT_DIR` under a sanitised single-segment filename, readable by their owner only, and never through a symbolic link.
+- HTTP transport checks `Host` and `Origin` on every bind address, binds to `127.0.0.1` by default, and refuses to start on a credential from the environment unless `--shared-identity` accepts that every caller shares it; it is then read-only.
 - **Observation titles, descriptions, component names and scanner output are third-party data**, supplied by scanners and by whoever wrote the scanned code. The server states this in its MCP instructions and in the relevant tool descriptions. Treat that content as data, never as instructions.
 
 > [!WARNING]
