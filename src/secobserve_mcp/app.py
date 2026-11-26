@@ -167,30 +167,33 @@ async def _observe_bound_credential() -> list[str | None]:
     return observed
 
 
-def verify_middleware_binds_credential() -> None:
+def verify_middleware_binds_credential() -> bool:
     """Refuse to start when the SDK no longer serves a message with the credential that message carried.
+
+    Returns True when the binding was observed, False when the check could not run at all.
 
     `Server.middleware` is provisional. A release that stopped consulting it would bind nothing, leave
     `request_auth_header()` on the environment credential, and serve every caller of a shared deployment as the
     service account -- with no error. It would also silence the audit log, which is why stdio fails here too.
 
     A verdict is only reached when the synthetic message ran. Anything that stops the check from running at all is
-    reported and tolerated: taking down every deployment over a check that cannot tell is worse than the gap it
-    closes.
+    reported and tolerated here, because stdio serves one caller on one credential and has nothing to mix up.
+    `main()` reads the result and refuses `--transport http` on it, where an unverified binding means every caller
+    may be served as the service account.
     """
     try:
         observed = asyncio.run(_observe_bound_credential())
     except Exception as exc:  # noqa: BLE001 - an unverifiable check must not be a failed one
         print(
             f"secobserve-mcp: the middleware self-check could not run ({type(exc).__name__}: {exc}). "
-            "Per-caller credentials are unverified; run `uv run pytest -q` against the installed mcp release "
-            "before serving more than one caller.",
+            "Per-caller credentials are unverified, so --transport http will refuse to start; run "
+            "`uv run pytest -q` against the installed mcp release.",
             file=sys.stderr,
         )
-        return
+        return False
 
     if observed == [SELF_CHECK_CREDENTIAL]:
-        return
+        return True
 
     symptom = "the SDK did not run mcp.middleware" if not observed else "the chain ran without binding the credential"
     raise RuntimeError(
@@ -200,4 +203,4 @@ def verify_middleware_binds_credential() -> None:
     )
 
 
-verify_middleware_binds_credential()
+MIDDLEWARE_VERIFIED = verify_middleware_binds_credential()

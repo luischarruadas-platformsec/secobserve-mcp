@@ -270,7 +270,7 @@ def main() -> int:
             return 2
 
     _load_tools()
-    from .app import mcp
+    from .app import MIDDLEWARE_VERIFIED, mcp
 
     try:
         config = get_config()
@@ -289,6 +289,14 @@ def main() -> int:
         return asyncio.run(_check())
 
     if args.transport == "http":
+        if not MIDDLEWARE_VERIFIED:
+            print(
+                "Refusing to start: --transport http serves more than one caller, and the check that each call is "
+                "served with the credential it carried could not run on this mcp release (see the message above). "
+                "Run over stdio, or install an mcp release this server was tested against (`mcp>=2.2,<2.3`).",
+                file=sys.stderr,
+            )
+            return 2
         allowed_hosts = config.allowed_hosts
         if config.api_token or config.jwt:
             if not args.shared_identity:
