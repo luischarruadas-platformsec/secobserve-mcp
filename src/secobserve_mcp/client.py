@@ -15,6 +15,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any
 
 import httpx
@@ -54,6 +55,9 @@ def get_client() -> httpx.AsyncClient:
             timeout=config.timeout,
             verify=config.verify_ssl,
             follow_redirects=False,
+            # One client serves every caller and SecObserve lists session authentication among its schemes, so a
+            # cookie kept from one caller's response would ride along on the next caller's request. This jar keeps none.
+            cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])),
         )
     return _client
 

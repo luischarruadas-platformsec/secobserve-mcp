@@ -34,7 +34,7 @@ Do not expand into these without the user asking.
 - Python 3.11+ (uses `X | None`, `from __future__ import annotations` in every module).
 - Entry point: `secobserve-mcp = secobserve_mcp.__main__:main`.
 - MCP: **SDK 2.x**, pinned to one minor (`mcp>=2.2,<2.3`) because the per-request credential hangs off a hook the SDK marks provisional. The class is `MCPServer` in `mcp.server.mcpserver`, **not** `FastMCP` — that name is the 1.x API and is gone.
-- HTTP: one `httpx.AsyncClient` shared for the process lifetime, never one per request.
+- HTTP: one `httpx.AsyncClient` shared for the process lifetime, never one per request. Its cookie jar accepts nothing, because that one client serves every caller.
 - Validation: Pydantic v2 via `Annotated[..., Field(...)]` on each tool argument; the signature is the schema.
 - Tests: `pytest` + `pytest-asyncio` (`asyncio_mode = "auto"`) with `respx` mocking HTTP. Never call mutating endpoints on a real SecObserve instance from a test.
 - Lint/types: `ruff` (line-length 120) and `mypy --strict`, both clean before anything ships.
