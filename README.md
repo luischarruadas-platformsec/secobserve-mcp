@@ -232,7 +232,8 @@ Arguments are never logged, and neither is the credential, the `Authorization` h
 
 ## Security
 
-- Credentials come from the environment and are never returned by a tool.
+- The server's own credential comes from the environment and is never returned by a tool.
+- Credentials SecObserve stores for other systems are replaced with `[redacted by secobserve-mcp]` in every tool result: any field named `api_key`, `password` or `webhook`, or ending in `_api_key`, `_password` or `_webhook`, at any depth. A request body carrying that placeholder is refused, so a read-modify-write cannot overwrite the stored value with it. File exports are the backend's own bytes and are not redacted.
 - Writes are refused by default; `SECOBSERVE_READ_ONLY=false` allows them.
 - `secobserve_delete` is disabled by default; deleting a product or product group additionally requires `confirm_name` to match the record's exact name, which the API itself verifies. Deletion cascades and is irreversible.
 - Uploads are confined to `SECOBSERVE_IMPORT_DIR`; exports are written to `SECOBSERVE_EXPORT_DIR` under a sanitised single-segment filename.

@@ -47,6 +47,7 @@ src/secobserve_mcp/
 ├── app.py              # MCPServer instance + INSTRUCTIONS shown to the agent
 ├── config.py           # env vars, lru_cache, auth header
 ├── client.py           # httpx client, error translation, tool_errors decorator
+├── redaction.py        # replaces stored third-party credentials in responses
 ├── registry.py         # resource catalogue: path, ops, list_fields, actions
 ├── schema.py           # reads and slices the live OpenAPI schema, cached once per process
 ├── formatting.py       # projection, markdown/json rendering, pagination envelope
@@ -137,6 +138,7 @@ This is the most important invariant in the repository.
 - Deleting `products` / `product_groups` / `scancodeio_projects` additionally requires `confirm_name` to match the record's exact name (a ScanCode.io project's `project_name`), passed to the API as a `name` query parameter; the API itself verifies it.
 - `SECOBSERVE_READ_ONLY` defaults to on and is enforced in `client.request`, before any request is made, so it does not depend on each tool remembering to check.
 - A boolean setting that is neither on nor off raises `ConfigError` and stops the server at startup. Never read an unrecognised value as off: for read-only, TLS verification and the audit log, off is the unsafe side.
+- `client.request` passes every parsed response through `redaction.redact`, which replaces credentials SecObserve stores for other systems (`api_key`, `password`, `webhook`, and any name ending in `_api_key`, `_password` or `_webhook`), and refuses a body that carries the placeholder. A tool never bypasses `client.request` to read one.
 - Uploads may only read files under `SECOBSERVE_IMPORT_DIR` (resolve, then compare `parents`). The reason is prompt injection: scan reports are third-party data, and without confinement an instruction planted in a report could talk an agent into uploading an unrelated local file to SecObserve.
 - Exports are written to `SECOBSERVE_EXPORT_DIR` under a basename sanitised to a single segment. A caller can never supply a path.
 - Never change an observation's severity or status with `secobserve_update`; it must go through `assess` so the observation log and the approval workflow stay intact.
