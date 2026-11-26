@@ -16,7 +16,8 @@ from typing import Any
 
 import httpx
 
-from .config import CREDENTIAL_HEADER, ConfigError, get_config, request_auth_header
+from .config import ENV_READ_ONLY, ConfigError, get_config, request_auth_header
+from .redaction import REDACTED, carries_placeholder, redact
 
 # httpx resolves dot segments and drops a fragment, so any of these lets a caller-supplied id move the request to
 # another endpoint, or out of /api with the credential attached.
@@ -148,12 +149,14 @@ async def request(
         expect_binary: Return raw bytes instead of parsed JSON (exports).
 
     Returns:
-        Parsed JSON (dict/list), raw bytes, or None for an empty 204 response.
+        Parsed JSON (dict/list) with stored credentials replaced by a placeholder, raw bytes, or None for an
+        empty 204 response.
 
     Raises:
         SecObserveError: on any non-2xx response, timeout or transport failure.
         ReadOnlyError: when a mutating verb is used in read-only mode.
-        ValueError: when the path holds a segment that would retarget the request.
+        ValueError: when the path holds a segment that would retarget the request, or the body would write a
+            redaction placeholder back.
         ConfigError: when no credentials are configured, or the request carried one this server cannot read.
     """
     if _UNSAFE_PATH.search(path):
@@ -164,9 +167,14 @@ async def request(
     config = get_config()
     if method.upper() != "GET" and config.read_only:
         raise ReadOnlyError(
-            f"Refusing {method} {path}: the server is in read-only mode, either because "
-            "SECOBSERVE_READ_ONLY is set or because it was started with --shared-identity, which forces it. "
-            f"To write, send the caller's own credential in {CREDENTIAL_HEADER}, or run over stdio."
+            f"Refusing {method} {path}: the server is in read-only mode, which is the default and which "
+            f"--shared-identity forces. To write, an operator restarts it over stdio with {ENV_READ_ONLY}=false."
+        )
+    if carries_placeholder(json_body) or carries_placeholder(data):
+        raise ValueError(
+            f"Refusing {method} {path}: the body contains {REDACTED!r}, which this server puts where SecObserve "
+            "returned a stored credential. Sending it back would overwrite the real value with the placeholder. "
+            "Leave that field out to keep the stored credential, or give it the real value."
         )
 
     clean_params = {k: v for k, v in (params or {}).items() if v is not None}
@@ -202,7 +210,7 @@ async def request(
     if response.status_code == 204 or not response.content:
         return None
     try:
-        return response.json()
+        return redact(response.json())
     except (json.JSONDecodeError, ValueError):
         return {"raw": response.text[:2000]}
 

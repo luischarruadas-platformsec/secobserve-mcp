@@ -19,10 +19,10 @@ from typing import Any
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 
-from .config import CREDENTIAL_HEADER, ConfigError, _bool_env, request_auth_header
+from .config import CREDENTIAL_HEADER, ENV_AUDIT_LOG, ConfigError, _bool_env, request_auth_header
 from .registry import RESOURCES
 
-ENV_AUDIT_LOG = "SECOBSERVE_AUDIT_LOG"
+__all__ = ["ENV_AUDIT_LOG", "audit_tool_calls"]
 
 # Domain separation: a digest here cannot be matched against a plain SHA-256 of the same token taken anywhere else.
 _DIGEST_PREFIX = b"secobserve-mcp/audit/v1:"
@@ -103,6 +103,14 @@ def _emit(ctx: ServerRequestContext[Any, Any], outcome: str, elapsed: float) -> 
         pass
 
 
+def _enabled() -> bool:
+    """Whether to write the record. `main()` refuses to start on an unreadable value; anything else keeps the record."""
+    try:
+        return _bool_env(ENV_AUDIT_LOG, True)
+    except ConfigError:
+        return True
+
+
 async def audit_tool_calls(ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:
     """Write one line per tool call, timed around the whole call so a tool that raises is timed like one that does not.
 
@@ -111,7 +119,7 @@ async def audit_tool_calls(ctx: ServerRequestContext[Any, Any], call_next: CallN
     failure that `@tool_errors` returned as text is a `returned`, because reading the string to tell the difference
     would tie this layer to the wording of every error message in the repository.
     """
-    if ctx.method != "tools/call" or not _bool_env(ENV_AUDIT_LOG, True):
+    if ctx.method != "tools/call" or not _enabled():
         return await call_next(ctx)
 
     started = time.perf_counter()

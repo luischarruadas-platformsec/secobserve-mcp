@@ -30,7 +30,7 @@
         },
         {
           "name": "SECOBSERVE_READ_ONLY",
-          "description": "Set to true to refuse every write operation",
+          "description": "Writes are refused by default; set to false to allow them",
           "isRequired": false
         },
         {
@@ -85,7 +85,7 @@
         },
         {
           "name": "SECOBSERVE_READ_ONLY",
-          "description": "Set to true to refuse every write operation",
+          "description": "Writes are refused by default; set to false to allow them",
           "isRequired": false
         },
         {

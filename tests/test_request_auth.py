@@ -249,5 +249,7 @@ async def test_a_refused_write_does_not_blame_an_environment_variable_alone() ->
     get_config.cache_clear()
     message = str(refused.value)
     assert "--shared-identity" in message
-    assert CREDENTIAL_HEADER in message
+    assert "SECOBSERVE_READ_ONLY=false" in message
+    # Read-only is process-wide, so a caller's own credential does not lift it and the message must not say it does.
+    assert CREDENTIAL_HEADER not in message
     assert "Unset it" not in message

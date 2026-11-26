@@ -18,6 +18,7 @@ ENV_READ_ONLY = "SECOBSERVE_READ_ONLY"
 ENV_ALLOW_DELETE = "SECOBSERVE_ALLOW_DELETE"
 ENV_EXPORT_DIR = "SECOBSERVE_EXPORT_DIR"
 ENV_IMPORT_DIR = "SECOBSERVE_IMPORT_DIR"
+ENV_AUDIT_LOG = "SECOBSERVE_AUDIT_LOG"
 
 CREDENTIAL_HEADER = "X-SecObserve-Token"
 # Bearer is SecObserve's OIDC path: it validates the token against the IdP's JWKS and resolves the real user,
@@ -30,14 +31,28 @@ DEFAULT_TIMEOUT = 60.0
 
 
 class ConfigError(RuntimeError):
-    """Raised when the server is started without usable credentials."""
+    """Raised when the server is started without usable credentials, or with a setting it cannot read."""
+
+
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
 
 
 def _bool_env(name: str, default: bool) -> bool:
+    """Read a switch, refusing a value that is neither on nor off.
+
+    Every switch here guards something, and a typo read as "off" picks the unsafe side for three of them in
+    silence: writes stay on, TLS verification goes off, the audit log stops.
+    """
     raw = os.environ.get(name)
-    if raw is None or raw == "":
+    if raw is None or not raw.strip():
         return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    value = raw.strip().lower()
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    raise ConfigError(f"{name}={raw!r} is not a boolean. Set it to true or false (1/0, yes/no and on/off also work).")
 
 
 @dataclass(frozen=True)
@@ -84,7 +99,8 @@ def get_config() -> Config:
         jwt=os.environ.get(ENV_JWT) or None,
         timeout=timeout,
         verify_ssl=_bool_env(ENV_VERIFY_SSL, True),
-        read_only=_bool_env(ENV_READ_ONLY, False),
+        # Scanner text reaches the agent as untrusted input, so writing is something an operator switches on.
+        read_only=_bool_env(ENV_READ_ONLY, True),
         # Deletes cascade in SecObserve, so they stay off unless switched on.
         allow_delete=_bool_env(ENV_ALLOW_DELETE, False),
         export_dir=os.environ.get(ENV_EXPORT_DIR) or os.path.join(os.getcwd(), "secobserve-exports"),
