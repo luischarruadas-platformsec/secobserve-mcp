@@ -18,7 +18,7 @@ import pytest
 import respx
 from mcp.server.context import ServerRequestContext
 
-from secobserve_mcp import prompts, tools_crud, tools_workflows  # noqa: F401  # registers the tools
+from secobserve_mcp import config, prompts, tools_crud, tools_workflows  # noqa: F401  # registers the tools
 from secobserve_mcp.app import mcp
 from secobserve_mcp.audit import ENV_AUDIT_LOG, audit_tool_calls
 from secobserve_mcp.config import CREDENTIAL_HEADER
@@ -29,7 +29,7 @@ API = f"{BASE_URL}/api"
 # Streamable HTTP refuses a Host outside its DNS-rebinding allow-list, whose patterns all carry a port.
 GATEWAY = "http://127.0.0.1:8931"
 
-LINE_KEYS = {"ts", "tool", "caller", "claimed_username", "resource", "outcome", "ms"}
+LINE_KEYS = {"ts", "tool", "caller", "claimed_username", "resource", "id", "outcome", "ms"}
 SECRET = "caller-secret-value"
 
 
@@ -96,6 +96,7 @@ async def test_a_tool_call_writes_one_line_naming_the_tool_the_caller_and_the_re
     assert line.keys() == LINE_KEYS
     assert line["tool"] == "secobserve_get"
     assert line["resource"] == "products"
+    assert line["id"] == 1
     assert line["outcome"] == "returned"
     assert line["caller"].startswith("apitoken:")
     assert line["claimed_username"] is None
@@ -171,10 +172,10 @@ async def test_a_resource_the_catalogue_does_not_know_is_dropped_rather_than_wri
 
 
 @respx.mock
-async def test_an_expected_failure_returned_as_text_is_recorded_as_returned(
+async def test_an_expected_failure_returned_as_text_is_recorded_as_failed(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`@tool_errors` turns a 404 into text, and this layer cannot read the string to tell -- so it does not claim to."""
+    """`@tool_errors` turns a 404 into text and says so itself, so this layer never reads the string to tell."""
     respx.get(f"{API}/products/99/").mock(return_value=httpx.Response(404, json={"detail": "Not found."}))
 
     async with gateway() as client:
@@ -182,7 +183,45 @@ async def test_an_expected_failure_returned_as_text_is_recorded_as_returned(
 
     assert result["content"][0]["text"].startswith("Error:")
     lines, _ = audit_lines(capsys)
-    assert lines[0]["outcome"] == "returned"
+    assert lines[0]["outcome"] == "failed"
+    assert lines[0]["id"] == 99
+
+
+@respx.mock
+async def test_a_write_a_guard_refused_does_not_look_like_a_write_that_happened(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SECOBSERVE_READ_ONLY", "true")
+    respx.get(f"{API}/oa3/schema/").mock(return_value=httpx.Response(200, json={"paths": {}}))
+    respx.patch(f"{API}/products/12/").mock(return_value=httpx.Response(200, json={"id": 12}))
+    arguments = {"resource": "products", "id": 12, "data": {"name": "x"}}
+
+    async with gateway() as client:
+        await call_tool(client, "secobserve_update", arguments, credential="APIToken x")
+    refused, _ = audit_lines(capsys)
+
+    monkeypatch.setenv("SECOBSERVE_READ_ONLY", "false")
+    config.get_config.cache_clear()
+    async with gateway() as client:
+        await call_tool(client, "secobserve_update", arguments, credential="APIToken x")
+    done, _ = audit_lines(capsys)
+
+    assert [line["outcome"] for line in refused] == ["failed"]
+    assert [line["outcome"] for line in done] == ["returned"]
+
+
+@respx.mock
+async def test_an_id_that_is_not_a_number_is_dropped_rather_than_written(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async with gateway() as client:
+        await call_tool(
+            client, "secobserve_get", {"resource": "products", "id": "smuggled-text"}, credential="APIToken x"
+        )
+
+    lines, raw = audit_lines(capsys)
+    assert lines[0]["id"] is None
+    assert "smuggled-text" not in raw
 
 
 @respx.mock

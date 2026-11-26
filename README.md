@@ -212,8 +212,8 @@ Expected failures come back as tool *text*, not as a raised exception: MCP repor
 Every tool call writes one JSON line to stderr. SecObserve's own observation log records writes only, so without this a read — which is how data leaves — leaves no trace anywhere.
 
 ```json
-{"ts":"2026-09-20T19:01:06.474+00:00","tool":"secobserve_list","caller":"apitoken:82fd9d5b1ae9","claimed_username":null,"resource":"observations","outcome":"returned","ms":37.0}
-{"ts":"2026-09-20T19:01:06.518+00:00","tool":"secobserve_list","caller":"jwt:09f002a0620f","claimed_username":"alice@example.com","resource":"observations","outcome":"returned","ms":0.9}
+{"ts":"2026-09-20T19:01:06.474+00:00","tool":"secobserve_get","caller":"apitoken:82fd9d5b1ae9","claimed_username":null,"resource":"observations","id":8123,"outcome":"returned","ms":37.0}
+{"ts":"2026-09-20T19:01:06.518+00:00","tool":"secobserve_list","caller":"jwt:09f002a0620f","claimed_username":"alice@example.com","resource":"observations","id":null,"outcome":"returned","ms":0.9}
 ```
 
 | Key | Meaning |
@@ -221,14 +221,15 @@ Every tool call writes one JSON line to stderr. SecObserve's own observation log
 | `caller` | `<source>:<digest>`, where source is `apitoken` or `jwt` for a credential the request carried in `X-SecObserve-Token`, and `server` for the process's own credential (stdio, or HTTP with no header). `unknown` when no credential could be read at all. |
 | `claimed_username` | The `username` claim of a JWT, for a line that names a person. **Unverified**: the token is the caller's own data and only SecObserve holds the secret. |
 | `resource` | The `resource` argument, and only when the catalogue knows that name. `null` for a tool that takes none, and for a value this server does not recognise. |
-| `outcome` | `returned` when the tool produced a result, `error` when it raised and MCP reported an error result, `rejected` when the call never reached the tool. |
+| `id` | The `id` argument when it is a number, so `resource` and `id` together name the record. `null` for a tool that takes none. |
+| `outcome` | `returned` when the tool produced a result, `failed` when it returned an expected failure as text (a guard refused the call, or SecObserve rejected it), `error` when it raised and MCP reported an error result, `rejected` when the call never reached the tool. |
 | `ms` | Wall time around the whole call, measured the same way whether the tool returns or raises. |
 
 The digest is the first 12 hex characters of a domain-separated SHA-256 of the credential. It correlates one caller's lines with each other and with nothing else: someone holding the log can tell two calls apart, group a caller's reads, and confirm a token they *already* have was used here — they cannot recover the credential, and cannot map a digest to a SecObserve user without one. That rests on the credential being high-entropy, which an issued API token is and a hand-written one is not.
 
-Arguments are never logged, and neither is the credential, the `Authorization` header or a request body. `resource` is the single exception, and the catalogue check is what makes it one: a value the caller invented is dropped rather than written into the log.
+Arguments are never logged, and neither is the credential, the `Authorization` header, a request body or a request URL. `resource` and `id` are the two exceptions: a resource the catalogue does not know and an id that is not a number are dropped rather than written into the log.
 
-`SECOBSERVE_AUDIT_LOG=false` switches the whole thing off. It is on by default because a record that has to be remembered is missing exactly when it is needed, and stderr is not the protocol channel, so no stdio client is disturbed. A tool that returns an expected failure as text is a `returned`: telling those apart would mean reading the string, which would tie the audit layer to the wording of every error message in the repository.
+`SECOBSERVE_AUDIT_LOG=false` switches the whole thing off. It is on by default because a record that has to be remembered is missing exactly when it is needed, and stderr is not the protocol channel, so no stdio client is disturbed. An expected failure is a `failed` because `@tool_errors` reports it, not because the audit layer reads the text.
 
 ## Security
 

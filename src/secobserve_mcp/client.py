@@ -12,7 +12,9 @@ import functools
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 import httpx
@@ -220,6 +222,28 @@ async def request(
         return {"raw": response.text[:2000]}
 
 
+# A shared list rather than a flag: the SDK may run a tool in a copy of the caller's context, where a value set
+# inside the tool never reaches the caller, while an object both sides hold does.
+_expected_failures: ContextVar[list[str] | None] = ContextVar("secobserve_expected_failures", default=None)
+
+
+@contextmanager
+def watch_expected_failures() -> Iterator[list[str]]:
+    """Collect the expected failures `tool_errors` turns into text inside this block, by exception type."""
+    seen: list[str] = []
+    token = _expected_failures.set(seen)
+    try:
+        yield seen
+    finally:
+        _expected_failures.reset(token)
+
+
+def _note_expected_failure(exc: Exception) -> None:
+    seen = _expected_failures.get()
+    if seen is not None:
+        seen.append(type(exc).__name__)
+
+
 def tool_errors(func: Callable[..., Awaitable[str]]) -> Callable[..., Awaitable[str]]:
     """Return expected failures as text instead of raising them.
 
@@ -234,8 +258,10 @@ def tool_errors(func: Callable[..., Awaitable[str]]) -> Callable[..., Awaitable[
         try:
             return await func(*args, **kwargs)
         except KeyError as exc:
+            _note_expected_failure(exc)
             return f"Error: {exc.args[0] if exc.args else exc}"
         except (SecObserveError, ConfigError, ValueError) as exc:
+            _note_expected_failure(exc)
             return f"Error: {exc}"
 
     return wrapper
