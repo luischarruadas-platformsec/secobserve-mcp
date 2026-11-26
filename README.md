@@ -98,6 +98,8 @@ uv venv && uv pip install -e ".[dev]"
 | `SECOBSERVE_EXPORT_DIR` | `./secobserve-exports` | Exports and VEX documents are written here. |
 | `SECOBSERVE_AUDIT_LOG` | `true` | One JSON line per tool call on stderr. `false` switches it off. |
 
+A boolean is `true`/`false`, `1`/`0`, `yes`/`no` or `on`/`off`. Any other value stops the server at startup instead of being read as off, because read as off `SECOBSERVE_VERIFY_SSL=ture` would disable certificate checks.
+
 Create a user API token:
 
 ```bash

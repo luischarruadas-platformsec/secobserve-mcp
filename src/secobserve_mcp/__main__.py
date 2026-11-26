@@ -20,6 +20,7 @@ from . import __version__
 from .config import (
     ENV_ALLOW_DELETE,
     ENV_API_TOKEN,
+    ENV_AUDIT_LOG,
     ENV_BASE_URL,
     ENV_EXPORT_DIR,
     ENV_IMPORT_DIR,
@@ -28,6 +29,7 @@ from .config import (
     ENV_TIMEOUT,
     ENV_VERIFY_SSL,
     ConfigError,
+    _bool_env,
     get_config,
 )
 
@@ -41,6 +43,9 @@ EPILOG = f"""environment:
   {ENV_ALLOW_DELETE} set to true to enable secobserve_delete and bulk-delete actions (deletes cascade)
   {ENV_IMPORT_DIR}   directory uploads may be read from (default: working directory)
   {ENV_EXPORT_DIR}   directory exports are written to (default: ./secobserve-exports)
+  {ENV_AUDIT_LOG}    one JSON line per tool call on stderr; set to false to switch it off
+
+A boolean is true/false, 1/0, yes/no or on/off. Any other value is refused at startup.
 """
 
 
@@ -210,13 +215,19 @@ def main() -> int:
 
     # Before the credential check: this is how you find out how to supply them.
     if args.print_config:
-        return _print_config(args.print_config)
+        try:
+            return _print_config(args.print_config)
+        except ConfigError as exc:
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            return 2
 
     _load_tools()
     from .app import mcp
 
     try:
         config = get_config()
+        # Read per call by the audit middleware, which must not fail a call; an unreadable value stops here instead.
+        _bool_env(ENV_AUDIT_LOG, True)
         _ = config.auth_header
     except ConfigError as exc:
         # stdio clients swallow stdout, so configuration problems go to stderr.
