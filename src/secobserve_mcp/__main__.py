@@ -14,10 +14,12 @@ import asyncio
 import ipaddress
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from . import __version__
 from .config import (
@@ -68,10 +70,40 @@ SHARED_IDENTITY_FLAG = "--shared-identity"
 
 CLIENTS = ("claude", "codex", "json", "vscode")
 
-# Once `uv tool install` has created a persistent environment, a bare `uvx secobserve-mcp` runs that pinned copy
-# forever. `@latest` revalidates against the index on every launch; `--isolated` only skips the tool environment and
-# may still serve a cached build.
-PACKAGE_SPEC = "secobserve-mcp@latest"
+PACKAGE = "secobserve-mcp"
+
+
+def _checkout() -> str | None:
+    """The checkout this install runs from, when it was installed from one that carries a lockfile.
+
+    PEP 610 records where a distribution came from when that was not an index: `uv sync` and `pip install -e .`
+    both write `direct_url.json` with the directory.
+    """
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    try:
+        origin = json.loads(distribution(PACKAGE).read_text("direct_url.json") or "{}")
+    except (PackageNotFoundError, ValueError):
+        return None
+    url = origin.get("url", "") if isinstance(origin, dict) else ""
+    if "dir_info" not in origin or not url.startswith("file://"):
+        return None
+    path = Path(url2pathname(urlsplit(url).path))
+    return str(path) if (path / "uv.lock").is_file() else None
+
+
+def _launch_command() -> list[str]:
+    """The argv a client should start this install with: the code that printed the snippet, and no other.
+
+    `secobserve-mcp@latest` fetched whatever the index held at every launch into a process holding the token, so
+    what a client ran had been read by nobody. From a checkout the answer is that checkout and its lockfile; from
+    an index it is this exact version, and moving off it is an edit someone makes on purpose.
+    """
+    checkout = _checkout()
+    if checkout:
+        return ["uv", "run", "--frozen", "--no-dev", "--project", checkout, PACKAGE]
+    return ["uvx", f"{PACKAGE}=={__version__}"]
+
 
 PYPI_JSON_URL = "https://pypi.org/pypi/secobserve-mcp/json"
 PYPI_TIMEOUT_SECONDS = 3.0
@@ -85,19 +117,22 @@ def _print_config(client: str) -> int:
     base_url = get_config().base_url
     env = {ENV_BASE_URL: base_url, ENV_API_TOKEN: TOKEN_PLACEHOLDER}
 
+    command, *arguments = _launch_command()
+
     if client == "claude":
         flags = " ".join(f"--env {k}={v}" for k, v in env.items())
-        print(f"claude mcp add secobserve {flags} -- uvx {PACKAGE_SPEC}")
+        print(f"claude mcp add secobserve {flags} -- {shlex.join([command, *arguments])}")
     elif client == "codex":
         pairs = ", ".join(f'{k} = "{v}"' for k, v in env.items())
         print("[mcp_servers.secobserve]")
-        print('command = "uvx"')
-        print(f'args = ["{PACKAGE_SPEC}"]')
+        # A JSON string is a valid TOML basic string, which matters once an argument is a path.
+        print(f"command = {json.dumps(command)}")
+        print(f"args = {json.dumps(arguments)}")
         print(f"env = {{ {pairs} }}")
     else:
         # VS Code keys this "servers"; everyone else kept "mcpServers".
         key = "servers" if client == "vscode" else "mcpServers"
-        block = {key: {"secobserve": {"command": "uvx", "args": [PACKAGE_SPEC], "env": env}}}
+        block = {key: {"secobserve": {"command": command, "args": arguments, "env": env}}}
         print(json.dumps(block, indent=2))
 
     print(f"\nReplace {TOKEN_PLACEHOLDER}; create one with", file=sys.stderr)
@@ -141,7 +176,7 @@ async def _report_install() -> None:
 
     if _runs_from_uv_tool_env():
         print("  install: a uv tool environment, which `uvx secobserve-mcp` keeps running instead of the latest")
-        print(f"  fix: uv tool upgrade secobserve-mcp, or point the client at `uvx {PACKAGE_SPEC}`")
+        print(f"  fix: uv tool upgrade {PACKAGE}, or point the client at `uvx {PACKAGE}=={latest or __version__}`")
 
 
 async def _check() -> int:

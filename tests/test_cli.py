@@ -58,7 +58,8 @@ def test_print_config_json_is_parseable_and_keyed_per_client(capsys) -> None:
     assert "servers" in json.loads(capsys.readouterr().out)
 
 
-def test_print_config_codex_is_valid_toml(capsys) -> None:
+def test_print_config_codex_is_valid_toml(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setattr("secobserve_mcp.__main__._checkout", lambda: None)
     _print_config("codex")
     parsed = tomllib.loads(capsys.readouterr().out)
     assert parsed["mcp_servers"]["secobserve"]["command"] == "uvx"
@@ -72,17 +73,76 @@ def test_print_config_keeps_the_token_hint_off_stdout(capsys) -> None:
     assert "create_user_api_token" not in captured.out
 
 
-def test_print_config_escapes_a_pinned_uv_tool_install(capsys) -> None:
-    """`uv tool install` makes a bare `uvx secobserve-mcp` run that copy forever, including from a client config."""
+def test_print_config_from_an_index_pins_the_version_that_printed_it(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """`@latest` ran whatever the index held at each launch, in a process holding the token."""
+    monkeypatch.setattr("secobserve_mcp.__main__._checkout", lambda: None)
+    pinned = f"secobserve-mcp=={__version__}"
+
     _print_config("claude")
-    assert capsys.readouterr().out.rstrip().endswith("-- uvx secobserve-mcp@latest")
+    assert capsys.readouterr().out.rstrip().endswith(f"-- uvx {pinned}")
 
     _print_config("codex")
-    assert tomllib.loads(capsys.readouterr().out)["mcp_servers"]["secobserve"]["args"] == ["secobserve-mcp@latest"]
+    assert tomllib.loads(capsys.readouterr().out)["mcp_servers"]["secobserve"]["args"] == [pinned]
 
     for client, key in (("json", "mcpServers"), ("vscode", "servers")):
         _print_config(client)
-        assert json.loads(capsys.readouterr().out)[key]["secobserve"]["args"] == ["secobserve-mcp@latest"]
+        assert json.loads(capsys.readouterr().out)[key]["secobserve"]["args"] == [pinned]
+
+
+def test_print_config_from_a_checkout_runs_that_checkout_with_its_lockfile(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """A pinned index version is still not the code someone reviewed in a fork; the checkout is."""
+    checkout = "/srv/reviewed code/secobserve-mcp"
+    monkeypatch.setattr("secobserve_mcp.__main__._checkout", lambda: checkout)
+    arguments = ["run", "--frozen", "--no-dev", "--project", checkout, "secobserve-mcp"]
+
+    _print_config("claude")
+    assert (
+        capsys.readouterr()
+        .out.rstrip()
+        .endswith("-- uv run --frozen --no-dev --project '/srv/reviewed code/secobserve-mcp' secobserve-mcp")
+    )
+
+    _print_config("codex")
+    server = tomllib.loads(capsys.readouterr().out)["mcp_servers"]["secobserve"]
+    assert (server["command"], server["args"]) == ("uv", arguments)
+
+    _print_config("json")
+    server = json.loads(capsys.readouterr().out)["mcpServers"]["secobserve"]
+    assert (server["command"], server["args"]) == ("uv", arguments)
+
+
+def test_no_snippet_floats_to_whatever_the_index_holds(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    for checkout in (None, "/srv/secobserve-mcp"):
+        monkeypatch.setattr("secobserve_mcp.__main__._checkout", lambda found=checkout: found)
+        for client in ("claude", "codex", "json", "vscode"):
+            _print_config(client)
+            assert "@latest" not in capsys.readouterr().out
+
+
+def test_a_checkout_is_recognised_by_its_direct_url_and_lockfile(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from secobserve_mcp.__main__ import _checkout
+
+    class Installed:
+        def __init__(self, direct_url: str | None) -> None:
+            self.direct_url = direct_url
+
+        def read_text(self, name: str) -> str | None:
+            return self.direct_url if name == "direct_url.json" else None
+
+    def installed_from(direct_url: str | None) -> str | None:
+        monkeypatch.setattr("importlib.metadata.distribution", lambda name: Installed(direct_url))
+        return _checkout()
+
+    here = json.dumps({"url": tmp_path.as_uri(), "dir_info": {"editable": True}})
+
+    assert installed_from(None) is None  # from an index: no direct_url.json at all
+    assert installed_from(here) is None  # a directory without a lockfile cannot be run --frozen
+    (tmp_path / "uv.lock").write_text("")
+    assert installed_from(here) == str(tmp_path)
+    assert installed_from(json.dumps({"url": "https://example.com/x.whl", "archive_info": {}})) is None
+    assert installed_from("not json") is None
 
 
 @respx.mock
@@ -140,7 +200,8 @@ async def test_report_install_flags_a_shadowing_tool_environment(
     out = capsys.readouterr().out
     assert "uv tool environment" in out
     assert "uv tool upgrade secobserve-mcp" in out
-    assert "uvx secobserve-mcp@latest" in out
+    assert f"uvx secobserve-mcp=={__version__}" in out
+    assert "@latest" not in out
 
 
 @respx.mock

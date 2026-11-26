@@ -65,7 +65,7 @@ Each one carries the caveats that decide whether the report is right: metrics co
 uvx secobserve-mcp --help
 ```
 
-`uvx` downloads and runs it without installing anything permanently. In VS Code: [one-click install](https://vscode.dev/redirect/mcp/install?name=secobserve&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22secobserve-mcp%40latest%22%5D%7D).
+`uvx` downloads and runs it without installing anything permanently.
 
 To put it on your `PATH` instead:
 
@@ -73,9 +73,17 @@ To put it on your `PATH` instead:
 uv tool install secobserve-mcp
 ```
 
-Once you have done that, `uv tool` owns the name: a bare `uvx secobserve-mcp` runs that pinned copy forever and never notices a newer release, so keep it current with `uv tool upgrade secobserve-mcp`.
-The client configurations below therefore say `uvx secobserve-mcp@latest`, which revalidates against PyPI on each launch — once per client session, not once per command.
-`--check` deliberately stays on the bare name, because its job is to report on the copy your clients are actually running.
+Once you have done that, `uv tool` owns the name: a bare `uvx secobserve-mcp` runs that copy and never notices a newer release, so keep it current with `uv tool upgrade secobserve-mcp`.
+
+A client configuration pins what it runs. `secobserve-mcp@latest` would fetch whatever the index holds at every launch into a process that holds your SecObserve token, so the code a client runs would have been read by nobody. `--print-config` therefore prints `uvx secobserve-mcp==<the version that printed it>`, and moving to a newer release is an edit you make after `--check` reports one.
+
+`uvx` still resolves the dependencies afresh each time it builds an environment. To pin those too, or to run code you reviewed in a fork, run from a checkout, which uses `uv.lock`:
+
+```bash
+uv run --frozen --no-dev --project /path/to/secobserve-mcp secobserve-mcp
+```
+
+`--print-config` prints that form by itself when it runs from a checkout.
 
 From a checkout, for development:
 
@@ -158,7 +166,7 @@ mcp.json` writes a clean file.
 ### Claude Code
 
 ```bash
-claude mcp add secobserve --env SECOBSERVE_BASE_URL=http://localhost:8000 --env SECOBSERVE_API_TOKEN=... -- uvx secobserve-mcp@latest
+claude mcp add secobserve --env SECOBSERVE_BASE_URL=http://localhost:8000 --env SECOBSERVE_API_TOKEN=... -- uvx secobserve-mcp==<version>
 ```
 
 ### Codex CLI
@@ -168,7 +176,7 @@ In `~/.codex/config.toml`:
 ```toml
 [mcp_servers.secobserve]
 command = "uvx"
-args = ["secobserve-mcp@latest"]
+args = ["secobserve-mcp==<version>"]
 env = { SECOBSERVE_BASE_URL = "http://localhost:8000", SECOBSERVE_API_TOKEN = "..." }
 ```
 
@@ -181,7 +189,7 @@ Most clients take the same JSON shape:
   "mcpServers": {
     "secobserve": {
       "command": "uvx",
-      "args": ["secobserve-mcp@latest"],
+      "args": ["secobserve-mcp==<version>"],
       "env": {
         "SECOBSERVE_BASE_URL": "http://localhost:8000",
         "SECOBSERVE_API_TOKEN": "..."
