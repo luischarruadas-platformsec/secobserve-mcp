@@ -99,7 +99,8 @@ def get_config() -> Config:
         jwt=os.environ.get(ENV_JWT) or None,
         timeout=timeout,
         verify_ssl=_bool_env(ENV_VERIFY_SSL, True),
-        read_only=_bool_env(ENV_READ_ONLY, False),
+        # Scanner text reaches the agent as untrusted input, so writing is something an operator switches on.
+        read_only=_bool_env(ENV_READ_ONLY, True),
         # Deletes cascade in SecObserve, so they stay off unless switched on.
         allow_delete=_bool_env(ENV_ALLOW_DELETE, False),
         export_dir=os.environ.get(ENV_EXPORT_DIR) or os.path.join(os.getcwd(), "secobserve-exports"),

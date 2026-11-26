@@ -8,12 +8,32 @@ import respx
 
 from secobserve_mcp import config
 from secobserve_mcp.__main__ import main
+from secobserve_mcp.client import ReadOnlyError, request
 
 from .conftest import BASE_URL
 
 API = f"{BASE_URL}/api"
 
 SWITCHES = [config.ENV_READ_ONLY, config.ENV_VERIFY_SSL, config.ENV_ALLOW_DELETE, config.ENV_AUDIT_LOG]
+
+
+async def test_writes_are_refused_when_nothing_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(config.ENV_READ_ONLY)
+    config.get_config.cache_clear()
+
+    assert config.get_config().read_only is True
+    # No respx mock: a request escaping the guard would fail as a connection error instead.
+    with pytest.raises(ReadOnlyError, match="SECOBSERVE_READ_ONLY=false"):
+        await request("PATCH", "/products/12/", json_body={"name": "x"})
+
+
+@respx.mock
+async def test_reads_still_work_when_nothing_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(config.ENV_READ_ONLY)
+    config.get_config.cache_clear()
+    respx.get(f"{API}/products/12/").mock(return_value=httpx.Response(200, json={"id": 12}))
+
+    assert await request("GET", "/products/12/") == {"id": 12}
 
 
 @pytest.mark.parametrize("raw", ["1", "true", "TRUE", " yes ", "On"])

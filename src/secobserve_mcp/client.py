@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from .config import CREDENTIAL_HEADER, ConfigError, get_config, request_auth_header
+from .config import ENV_READ_ONLY, ConfigError, get_config, request_auth_header
 
 # httpx resolves dot segments and drops a fragment, so any of these lets a caller-supplied id move the request to
 # another endpoint, or out of /api with the credential attached.
@@ -164,9 +164,8 @@ async def request(
     config = get_config()
     if method.upper() != "GET" and config.read_only:
         raise ReadOnlyError(
-            f"Refusing {method} {path}: the server is in read-only mode, either because "
-            "SECOBSERVE_READ_ONLY is set or because it was started with --shared-identity, which forces it. "
-            f"To write, send the caller's own credential in {CREDENTIAL_HEADER}, or run over stdio."
+            f"Refusing {method} {path}: the server is in read-only mode, which is the default and which "
+            f"--shared-identity forces. To write, an operator restarts it over stdio with {ENV_READ_ONLY}=false."
         )
 
     clean_params = {k: v for k, v in (params or {}).items() if v is not None}

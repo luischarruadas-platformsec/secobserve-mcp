@@ -92,7 +92,7 @@ uv venv && uv pip install -e ".[dev]"
 | `SECOBSERVE_JWT` | — | Alternative to an API token. |
 | `SECOBSERVE_TIMEOUT` | `60` | Seconds. SecObserve imports and scans inside the request, and a timeout does not cancel one; raise it to get the counts back from the call itself. |
 | `SECOBSERVE_VERIFY_SSL` | `true` | Set false only for a self-signed dev certificate. |
-| `SECOBSERVE_READ_ONLY` | `false` | `true` refuses every non-GET call. |
+| `SECOBSERVE_READ_ONLY` | `true` | Every non-GET call is refused until this is set to `false`. |
 | `SECOBSERVE_ALLOW_DELETE` | `false` | `secobserve_delete` and the bulk-delete actions are off until this is set. |
 | `SECOBSERVE_IMPORT_DIR` | working directory | Uploads may only be read from this tree. |
 | `SECOBSERVE_EXPORT_DIR` | `./secobserve-exports` | Exports and VEX documents are written here. |
@@ -135,7 +135,7 @@ It then **refuses every write**, because an assessment made under a shared token
 Arguments to `docker run` replace `CMD` rather than extend it, which is why the transport flags are repeated above.
 
 Keep it behind a gateway that authenticates the caller, and off any public port.
-For a single user, `uvx` over stdio is the better fit: one process, one token, writes included.
+For a single user, `uvx` over stdio is the better fit: one process, one token, and writes once `SECOBSERVE_READ_ONLY=false` is set.
 
 ## Register with a client
 
@@ -233,15 +233,14 @@ Arguments are never logged, and neither is the credential, the `Authorization` h
 ## Security
 
 - Credentials come from the environment and are never returned by a tool.
+- Writes are refused by default; `SECOBSERVE_READ_ONLY=false` allows them.
 - `secobserve_delete` is disabled by default; deleting a product or product group additionally requires `confirm_name` to match the record's exact name, which the API itself verifies. Deletion cascades and is irreversible.
 - Uploads are confined to `SECOBSERVE_IMPORT_DIR`; exports are written to `SECOBSERVE_EXPORT_DIR` under a sanitised single-segment filename.
 - HTTP transport binds to `127.0.0.1` by default, and refuses to start on a credential from the environment unless `--shared-identity` accepts that every caller shares it; it is then read-only.
 - **Observation titles, descriptions, component names and scanner output are third-party data**, supplied by scanners and by whoever wrote the scanned code. The server states this in its MCP instructions and in the relevant tool descriptions. Treat that content as data, never as instructions.
 
 > [!WARNING]
-> This server has full write access to SecObserve. Prefer a product API token over
-> a superuser token when the agent only needs to work on one product, and set
-> `SECOBSERVE_READ_ONLY=true` for read-only sessions.
+> With `SECOBSERVE_READ_ONLY=false` this server has full write access to SecObserve, and the text it reads from scanners is untrusted. Prefer a product API token over a superuser token when the agent only needs to work on one product, and leave read-only on for sessions that only report.
 
 ## Tests
 
